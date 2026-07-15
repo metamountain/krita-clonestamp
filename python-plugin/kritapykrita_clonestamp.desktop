@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=clonestamp
+X-Python-2-Compatible=false
+Name=Clonestamp Tool with Preview
+Comment=Photoshop-style Clone Stamp: Ctrl+click to sample, drag to paint a soft-edged copy elsewhere, with a live preview and proper undo support.

@@ -1,0 +1,9 @@
+{
+    "Id": "Clonestamp Tool with Preview",
+    "Type": "Service",
+    "X-KDE-Library": "kritatoolclonestamp",
+    "X-KDE-ServiceTypes": [
+        "Krita/Tool"
+    ],
+    "X-Krita-Version": "28"
+}
