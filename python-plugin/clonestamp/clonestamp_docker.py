@@ -3,7 +3,7 @@
 
 from krita import DockWidget, Krita
 from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt, QUrl
-from PyQt5.QtGui import QColor, QCursor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
+from PyQt5.QtGui import QColor, QCursor, QDesktopServices, QIcon, QPainter, QPen, QPixmap, QRadialGradient
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QOpenGLWidget,
     QPushButton, QSpinBox, QVBoxLayout, QWidget,
