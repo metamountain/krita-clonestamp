@@ -281,24 +281,34 @@ def finalize_stroke(doc, state):
     # Source position = destination + stroke offset.
     src_x = mask_rect.x() + int(round(state.stroke_offset.x()))
     src_y = mask_rect.y() + int(round(state.stroke_offset.y()))
-    src_rect = QRect(src_x, src_y,
-                     mask_rect.width(), mask_rect.height()).intersected(src_bounds)
-    dst_rect = mask_rect.intersected(dst_node.bounds())
+    src_full = QRect(src_x, src_y, mask_rect.width(), mask_rect.height())
+    dst_full = QRect(mask_rect.x(), mask_rect.y(),
+                     mask_rect.width(), mask_rect.height())
 
-    if src_rect.isEmpty() or dst_rect.isEmpty():
+    src_clip = src_full.intersected(src_bounds)
+    dst_clip = dst_full.intersected(dst_node.bounds())
+
+    if src_clip.isEmpty() or dst_clip.isEmpty():
         state.clear_accumulator()
         return None
 
-    final_w = min(src_rect.width(), dst_rect.width())
-    final_h = min(src_rect.height(), dst_rect.height())
+    # Shrink both rects by whichever side needs it more, so they stay the
+    # same size and pixel-aligned even when one side runs off the canvas.
+    left = max(src_clip.x() - src_full.x(), dst_clip.x() - dst_full.x())
+    top = max(src_clip.y() - src_full.y(), dst_clip.y() - dst_full.y())
+    right = max(src_full.right() - src_clip.right(),
+                dst_full.right() - dst_clip.right())
+    bottom = max(src_full.bottom() - src_clip.bottom(),
+                 dst_full.bottom() - dst_clip.bottom())
+
+    final_w = mask_rect.width() - left - right
+    final_h = mask_rect.height() - top - bottom
     if final_w <= 0 or final_h <= 0:
         state.clear_accumulator()
         return None
 
-    src_rect.setWidth(final_w)
-    src_rect.setHeight(final_h)
-    dst_rect.setWidth(final_w)
-    dst_rect.setHeight(final_h)
+    src_rect = QRect(src_full.x() + left, src_full.y() + top, final_w, final_h)
+    dst_rect = QRect(dst_full.x() + left, dst_full.y() + top, final_w, final_h)
 
     # Slice the accumulator: _acc_left/_acc_top is the accumulator origin
     # (= document origin), not _acc_bounds.
