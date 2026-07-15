@@ -273,7 +273,7 @@ class ClonestampDocker(DockWidget):
                 self._describeLiveSource()
                 self.brushStatusLabel.setText("Source sampled.")
             else:
-                core.begin_stroke(core.STATE, doc_point)
+                core.begin_stroke(core.STATE, doc, doc_point)
                 self._stroke_active = True
                 self._timer.start()
         except core.ClonestampError as e:
