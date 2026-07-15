@@ -63,7 +63,14 @@ class ClonestampDocker(DockWidget):
         self._resize_active = False
         self._resize_start_global = None
         self._resize_start_size = None
-        self._preview = PreviewOverlay()
+        # Created lazily in _arm(), not here: this is a top-level, always-on-
+        # top, click-through window, and constructing it unconditionally at
+        # docker-construction time (which can happen automatically at Krita
+        # startup if this docker was left open in a previous session, before
+        # Krita's own main window/event loop are fully settled) is a
+        # plausible source of an early freeze. Only ever needed once the
+        # user actually enables the brush.
+        self._preview = None
         self._timer = QTimer(self)
         self._timer.setInterval(40)  # ~25Hz polling of QCursor.pos()
         self._timer.timeout.connect(self._onTimerTick)
@@ -191,6 +198,8 @@ class ClonestampDocker(DockWidget):
                 "Could not find the canvas widget; Clone Brush can't be enabled.")
             self.enableCheck.setChecked(False)
             return
+        if self._preview is None:
+            self._preview = PreviewOverlay()
         self._canvas_widget = widget
         QApplication.instance().installEventFilter(self)
         self._updateBrushCursor()
@@ -206,7 +215,8 @@ class ClonestampDocker(DockWidget):
         self._stroke_active = False
         self._resize_active = False
         self._canvas_widget = None
-        self._preview.hide()
+        if self._preview is not None:
+            self._preview.hide()
 
     # --- event filter: only press/release are used; drag is timer-driven --
 
