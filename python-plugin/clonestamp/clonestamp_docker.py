@@ -201,6 +201,14 @@ class ClonestampDocker(DockWidget):
         if self._preview is None:
             self._preview = PreviewOverlay()
         self._canvas_widget = widget
+        # Must be QApplication-global, not widget-local: tried scoping this
+        # to self._canvas_widget directly (cheaper in principle -- routes
+        # far fewer events through Python) but it silently stopped receiving
+        # the canvas's MouseButtonPress/Release entirely, confirming Krita
+        # doesn't deliver them straight to this widget instance in a way a
+        # local filter observes. Global scope is required for correctness;
+        # if performance is still a problem, the fix has to be cheaper work
+        # *inside* eventFilter, not a narrower install target.
         QApplication.instance().installEventFilter(self)
         self._updateBrushCursor()
         if core.STATE.has_point_source:
