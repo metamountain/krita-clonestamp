@@ -344,6 +344,12 @@ class ClonestampDocker(DockWidget):
             self._updatePreview(doc, core.STATE.source_node, core.STATE.source_point, diameter)
 
     def _updatePreview(self, doc, src_node, src_center, diameter):
+        # TEMPORARY diagnostic no-op: isolating whether the floating preview
+        # window (pixel read + setGeometry/show on an always-on-top,
+        # translucent, frameless window, ~25x/sec while the cursor moves)
+        # is the actual freeze cause, separate from the timer/eventFilter
+        # loop itself. Remove this line once that's confirmed either way.
+        return
         # Throttle by actual cursor movement, not just timer tick: at 25Hz,
         # re-reading document pixels *and* repositioning an always-on-top
         # window on every single tick -- even while the cursor sits still --
