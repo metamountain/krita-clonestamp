@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 metamountain <mail@metamountain.net>
 
 from krita import DockWidget, Krita
-from PyQt5.QtCore import QEvent, QPoint, QPointF, QTimer, Qt
+from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt
 from PyQt5.QtGui import QColor, QCursor, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QOpenGLWidget,
@@ -25,33 +25,6 @@ def _find_canvas_widget():
     return central.findChild(QOpenGLWidget)
 
 
-class PreviewOverlay(QWidget):
-    """A small always-on-top, click-through, translucent window that shows
-    the current source patch near the cursor. Independent of Krita's own
-    canvas widget/rendering -- it never touches or overlays on top of the
-    OpenGL canvas surface itself, which is what made a true in-canvas ghost
-    preview infeasible from Python. Just an ordinary floating Qt window."""
-
-    def __init__(self):
-        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setWindowOpacity(0.75)
-        self._image = None
-
-    def setImage(self, image):
-        self._image = image
-        self.update()
-
-    def paintEvent(self, event):
-        if self._image is None:
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        painter.drawImage(self.rect(), self._image)
-
-
 class ClonestampDocker(DockWidget):
 
     def __init__(self):
@@ -63,15 +36,6 @@ class ClonestampDocker(DockWidget):
         self._resize_active = False
         self._resize_start_global = None
         self._resize_start_size = None
-        # Created lazily in _arm(), not here: this is a top-level, always-on-
-        # top, click-through window, and constructing it unconditionally at
-        # docker-construction time (which can happen automatically at Krita
-        # startup if this docker was left open in a previous session, before
-        # Krita's own main window/event loop are fully settled) is a
-        # plausible source of an early freeze. Only ever needed once the
-        # user actually enables the brush.
-        self._preview = None
-        self._last_preview_screen_pos = None
         self._timer = QTimer(self)
         self._timer.setInterval(40)  # ~25Hz polling of QCursor.pos()
         self._timer.timeout.connect(self._onTimerTick)
@@ -199,8 +163,6 @@ class ClonestampDocker(DockWidget):
                 "Could not find the canvas widget; Clone Brush can't be enabled.")
             self.enableCheck.setChecked(False)
             return
-        if self._preview is None:
-            self._preview = PreviewOverlay()
         self._canvas_widget = widget
         # Must be QApplication-global, not widget-local: tried scoping this
         # to self._canvas_widget directly (cheaper in principle -- routes
@@ -224,9 +186,6 @@ class ClonestampDocker(DockWidget):
         self._stroke_active = False
         self._resize_active = False
         self._canvas_widget = None
-        self._last_preview_screen_pos = None
-        if self._preview is not None:
-            self._preview.hide()
 
     # --- event filter: only press/release are used; drag is timer-driven --
 
@@ -281,7 +240,6 @@ class ClonestampDocker(DockWidget):
                 core.sample_source_point(doc, core.STATE, doc_point)
                 self._describeLiveSource()
                 self.brushStatusLabel.setText("Source sampled.")
-                self._timer.start()  # begin the continuous hover-preview
             else:
                 core.begin_stroke(core.STATE, doc_point)
                 self._stroke_active = True
@@ -304,15 +262,21 @@ class ClonestampDocker(DockWidget):
         return True
 
     def _onTimerTick(self):
+        # Only ever needed while actively resizing (Shift+drag) or actively
+        # painting (drag) -- there is no floating preview to keep polling
+        # for anymore (see git history: a hover-only preview window, shown
+        # at ~25Hz via setGeometry()/show() on an always-on-top translucent
+        # window, reliably froze Krita hard during live testing -- removed
+        # rather than further patched, since even a movement-throttled
+        # version still froze during actual use).
         if self._canvas_widget is None:
             self._timer.stop()
             return
         if self._resize_active:
             self._onResizeTick()
             return
-        if not (self._stroke_active or core.STATE.has_point_source):
+        if not self._stroke_active:
             self._timer.stop()
-            self._preview.hide()
             return
 
         local_pos = self._canvas_widget.mapFromGlobal(QCursor.pos())
@@ -323,56 +287,12 @@ class ClonestampDocker(DockWidget):
         if doc_point is None:
             return
 
-        zoom = canvas.zoomLevel()
-        diameter = max(4, int(core.STATE.brush_size * zoom))
         doc = Krita.instance().activeDocument()
-
-        if self._stroke_active:
-            try:
-                core.continue_stroke(doc, core.STATE, doc_point)
-            except core.ClonestampError as e:
-                self.brushStatusLabel.setText(str(e))
-                self._stroke_active = False
-                return
-            offset = core.STATE.stroke_offset
-            src_center = QPointF(doc_point.x() + offset.x(), doc_point.y() + offset.y())
-            self._updatePreview(doc, core.STATE.source_node, src_center, diameter)
-        else:
-            # Hovering with a source already set: preview what the *first*
-            # dab of a new stroke starting right here would look like --
-            # i.e. the original sampled patch, carried to the cursor.
-            self._updatePreview(doc, core.STATE.source_node, core.STATE.source_point, diameter)
-
-    def _updatePreview(self, doc, src_node, src_center, diameter):
-        # TEMPORARY diagnostic no-op: isolating whether the floating preview
-        # window (pixel read + setGeometry/show on an always-on-top,
-        # translucent, frameless window, ~25x/sec while the cursor moves)
-        # is the actual freeze cause, separate from the timer/eventFilter
-        # loop itself. Remove this line once that's confirmed either way.
-        return
-        # Throttle by actual cursor movement, not just timer tick: at 25Hz,
-        # re-reading document pixels *and* repositioning an always-on-top
-        # window on every single tick -- even while the cursor sits still --
-        # is a lot of repeated work for zero visible change, and was the
-        # likely cause of a severe freeze during live testing. A few pixels
-        # of preview lag is imperceptible; skipping redundant updates isn't.
-        screen_pos = QCursor.pos()
-        if (self._last_preview_screen_pos is not None
-                and (screen_pos - self._last_preview_screen_pos).manhattanLength() < 3):
-            return
-        self._last_preview_screen_pos = screen_pos
-
-        image = core.read_preview_patch(doc, src_node, src_center, core.STATE.brush_size,
-                                         core.STATE.brush_hardness, core.STATE.sample_scope)
-        if image is None:
-            self._preview.hide()
-            return
-        radius = diameter // 2
-        pos = screen_pos - QPoint(radius, radius)
-        self._preview.setImage(image)
-        self._preview.setGeometry(pos.x(), pos.y(), diameter, diameter)
-        if not self._preview.isVisible():
-            self._preview.show()
+        try:
+            core.continue_stroke(doc, core.STATE, doc_point)
+        except core.ClonestampError as e:
+            self.brushStatusLabel.setText(str(e))
+            self._stroke_active = False
 
     def _onResizeTick(self):
         current = QCursor.pos()
@@ -405,7 +325,14 @@ class ClonestampDocker(DockWidget):
     def _updateBrushCursor(self):
         """Sets the canvas cursor to a ring matching the current brush size
         (in screen pixels, accounting for zoom) -- Krita's own brush-outline
-        cursor doesn't apply while another tool is active underneath ours."""
+        cursor doesn't apply while another tool is active underneath ours.
+        Also draws a dimmer inner ring scaled by hardness (large/near the
+        outer ring = hard edge, small/near the center = soft falloff), since
+        this is the only safe place left to show hardness at all -- a
+        floating preview window would give a nicer live patch preview, but
+        that's exactly the mechanism that froze Krita (see _onTimerTick).
+        This is a plain cursor bitmap, set once per resize, not a
+        continuously-repositioned window, so it doesn't carry that risk."""
         if self._canvas_widget is None:
             return
         canvas = self._currentCanvas()
@@ -416,10 +343,19 @@ class ClonestampDocker(DockWidget):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setBrush(Qt.NoBrush)
+
         painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
         painter.drawEllipse(1, 1, diameter, diameter)
         painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
         painter.drawEllipse(0, 0, diameter, diameter)
+
+        hardness_diameter = max(2, int(diameter * core.STATE.brush_hardness))
+        inset = (diameter - hardness_diameter) // 2
+        painter.setPen(QPen(QColor(0, 0, 0, 140), 1, Qt.DashLine))
+        painter.drawEllipse(inset + 1, inset + 1, hardness_diameter, hardness_diameter)
+        painter.setPen(QPen(QColor(255, 255, 255, 140), 1, Qt.DashLine))
+        painter.drawEllipse(inset, inset, hardness_diameter, hardness_diameter)
+
         painter.end()
         center = (diameter + 2) // 2
         self._canvas_widget.setCursor(QCursor(pixmap, center, center))

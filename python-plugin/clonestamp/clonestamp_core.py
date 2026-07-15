@@ -226,24 +226,6 @@ def _resolve_source(doc, src_node, sample_scope):
     return src_node.pixelData, src_node.bounds()
 
 
-def read_preview_patch(doc, src_node, center, size, hardness, sample_scope="current"):
-    """Read-only crop+mask (same shape as stamp_dab's source side) for a live
-    ghost preview -- does not touch the document, no undo step involved."""
-    if doc is None or src_node is None or center is None:
-        return None
-    read_fn, bounds = _resolve_source(doc, src_node, sample_scope)
-    size = max(1, int(size))
-    half = size / 2.0
-    rect = QRect(int(round(center.x() - half)), int(round(center.y() - half)), size, size)
-    clip = rect.intersected(bounds)
-    if clip.isEmpty():
-        return None
-    raw = read_fn(clip.x(), clip.y(), clip.width(), clip.height())
-    image = QImage(raw, clip.width(), clip.height(), PIXEL_FORMAT).convertToFormat(BLEND_FORMAT)
-    _apply_radial_mask(image, hardness)
-    return image
-
-
 def stamp_dab(doc, src_node, src_center, dst_node, dst_center, size, hardness, opacity, sample_scope="current"):
     """Stamp one round, soft-edged dab: read a `size`x`size` square centered
     at `src_center`, mask+scale it, blend over the destination centered at
