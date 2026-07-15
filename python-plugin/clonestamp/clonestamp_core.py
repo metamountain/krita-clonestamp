@@ -6,8 +6,19 @@ No Qt-widget code lives here so it can be exercised/reasoned about independently
 of the docker and extension UI.
 """
 
+import os, traceback
 from PyQt5.QtCore import QRect, QRectF, QByteArray, Qt, QPointF
 from PyQt5.QtGui import QImage, QPainter, QColor, QRadialGradient
+
+_DEBUG_LOG = os.environ.get("TEMP", "") + "\\clonestamp_debug.txt"
+
+
+def _debug(msg):
+    try:
+        with open(_DEBUG_LOG, "a") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
 
 SUPPORTED_COLOR_MODEL = "RGBA"
 SUPPORTED_COLOR_DEPTH = "U8"
@@ -209,13 +220,22 @@ def begin_stroke(state, doc, doc_point):
     if not state.has_point_source:
         raise ClonestampError(
             "Ctrl+click on the canvas first to set a clone source.")
+    if doc is None:
+        raise ClonestampError("No active document.")
     if not (state.aligned and state.stroke_offset is not None):
         state.stroke_offset = QPointF(
             state.source_point.x() - doc_point.x(),
             state.source_point.y() - doc_point.y())
     state.last_dab_point = None
     state.clear_accumulator()
-    _ensure_accumulator(state, doc.bounds())
+    bounds = doc.bounds()
+    _debug("begin_stroke: doc bounds=%s" % (bounds,))
+    ok = _ensure_accumulator(state, bounds)
+    _debug("begin_stroke: acc=%s bounds=%s left=%d top=%d size=%s" % (
+        "OK" if ok else "FAIL",
+        state._acc_bounds, state._acc_left, state._acc_top,
+        (state._acc_image.width(), state._acc_image.height())
+        if state._acc_image else "NONE"))
 
 
 def continue_stroke(doc, state, doc_point, min_spacing=2.0):
@@ -228,8 +248,10 @@ def continue_stroke(doc, state, doc_point, min_spacing=2.0):
         if (dx * dx + dy * dy) < (min_spacing * min_spacing):
             return None
 
-    _paint_dab_to_accumulator(state, doc_point, state.brush_size,
-                               state.brush_hardness, state.brush_opacity)
+    painted = _paint_dab_to_accumulator(state, doc_point, state.brush_size,
+                                         state.brush_hardness, state.brush_opacity)
+    _debug("continue_stroke: dab@(%d,%d) painted=%s acc_bounds=%s" % (
+        int(doc_point.x()), int(doc_point.y()), painted, state._acc_bounds))
     state.last_dab_point = QPointF(doc_point)
 
     src_center = QPointF(
@@ -254,16 +276,24 @@ def _resolve_source(doc, src_node, sample_scope):
 
 
 def finalize_stroke(doc, state):
+    _debug("finalize_stroke: acc=%s bounds=%s" % (
+        "EXISTS" if state._acc_image else "NONE",
+        state._acc_bounds))
     if state._acc_image is None or state._acc_bounds is None:
+        _debug("finalize_stroke: nothing to paint (no accumulator)")
         return None
 
     dst_node = doc.activeNode()
     if dst_node is None or dst_node.locked():
+        _debug("finalize_stroke: dst_node=%s locked=%s" % (
+            dst_node.name() if dst_node else "NONE",
+            dst_node.locked() if dst_node else "N/A"))
         state.clear_accumulator()
         return None
 
     src_node = state.source_node
     if src_node is None:
+        _debug("finalize_stroke: src_node is None")
         state.clear_accumulator()
         return None
 
@@ -273,7 +303,9 @@ def finalize_stroke(doc, state):
         _ensure_color_space(src_node, "read from")
 
     doc_bounds = doc.bounds()
+    _debug("finalize_stroke: doc_bounds=%s src_bounds=%s" % (doc_bounds, src_bounds))
     mask_rect = state._acc_bounds.intersected(doc_bounds)
+    _debug("finalize_stroke: mask_rect=%s" % (mask_rect,))
     if mask_rect.isEmpty():
         state.clear_accumulator()
         return None

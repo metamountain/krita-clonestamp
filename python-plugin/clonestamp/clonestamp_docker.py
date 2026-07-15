@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: CC0-1.0
 # SPDX-FileCopyrightText: 2026 metamountain <mail@metamountain.net>
 
+import os, traceback
 from krita import DockWidget, Krita
 from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt, QUrl
 from PyQt5.QtGui import QColor, QCursor, QDesktopServices, QIcon, QPainter, QPen, QPixmap, QRadialGradient
@@ -221,10 +222,19 @@ class ClonestampDocker(DockWidget):
             return False
 
         et = event.type()
-        if et == QEvent.MouseButtonPress:
-            return self._onCanvasPress(event)
-        elif et == QEvent.MouseButtonRelease:
-            return self._onCanvasRelease(event)
+        try:
+            if et == QEvent.MouseButtonPress:
+                return self._onCanvasPress(event)
+            elif et == QEvent.MouseButtonRelease:
+                return self._onCanvasRelease(event)
+        except Exception as e:
+            msg = "eventFilter error: %s\n%s" % (e, traceback.format_exc())
+            try:
+                with open(os.environ.get("TEMP", "") + "\\clonestamp_debug.txt", "a") as f:
+                    f.write(msg + "\n")
+            except Exception:
+                pass
+            self.brushStatusLabel.setText(str(e)[:80])
         return False
 
     def _currentCanvas(self):
