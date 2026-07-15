@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 metamountain <mail@metamountain.net>
 
 from krita import DockWidget, Krita
-from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt
-from PyQt5.QtGui import QColor, QCursor, QIcon, QPainter, QPen, QPixmap
+from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt, QUrl
+from PyQt5.QtGui import QColor, QCursor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QOpenGLWidget,
-    QSpinBox, QVBoxLayout, QWidget,
+    QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from . import clonestamp_core as core
@@ -108,6 +108,23 @@ class ClonestampDocker(DockWidget):
         self.brushStatusLabel.setWordWrap(True)
         layout.addWidget(self.brushStatusLabel)
 
+        aboutRow = QHBoxLayout()
+        versionLabel = QLabel("v{0}".format(core.VERSION))
+        aboutRow.addWidget(versionLabel)
+        githubLabel = QLabel('<a href="{0}">GitHub</a>'.format(core.GITHUB_URL))
+        githubLabel.setOpenExternalLinks(True)
+        aboutRow.addWidget(githubLabel)
+        aboutRow.addStretch()
+        updateButton = QPushButton("Check for Updates")
+        # Opens the releases page in the browser rather than downloading and
+        # replacing files while Krita is running -- auto-updating a plugin
+        # whose module is currently loaded/imported is a much riskier can of
+        # worms (partial overwrite, needing an exact restart timing) for
+        # limited benefit over "here's where to get the latest version."
+        updateButton.clicked.connect(self._onCheckForUpdates)
+        aboutRow.addWidget(updateButton)
+        layout.addLayout(aboutRow)
+
         layout.addStretch()
         widget.setLayout(layout)
         self.setWidget(widget)
@@ -141,6 +158,9 @@ class ClonestampDocker(DockWidget):
 
     def _onSampleScopeChanged(self, index):
         core.STATE.sample_scope = "all" if index == 1 else "current"
+
+    def _onCheckForUpdates(self):
+        QDesktopServices.openUrl(QUrl(core.GITHUB_URL + "/releases/latest"))
 
     def _describeLiveSource(self):
         p = core.STATE.source_point
@@ -219,6 +239,13 @@ class ClonestampDocker(DockWidget):
     def _onCanvasPress(self, event):
         if event.button() != Qt.LeftButton:
             return False  # only left-click is ours; right/middle pass through untouched
+
+        # libkis's Canvas exposes no zoomChanged signal to listen for, so the
+        # cursor ring (scaled by zoom -- see _updateBrushCursor) can only go
+        # stale if the user zooms without touching Size/Hardness/resize.
+        # Refreshing here, at the moment they actually start interacting,
+        # covers that without adding another poll loop.
+        self._updateBrushCursor()
 
         mods = event.modifiers()
 

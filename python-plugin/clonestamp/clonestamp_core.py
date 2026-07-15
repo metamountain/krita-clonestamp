@@ -12,6 +12,9 @@ from PyQt5.QtGui import QImage, QPainter, QColor, QRadialGradient
 SUPPORTED_COLOR_MODEL = "RGBA"
 SUPPORTED_COLOR_DEPTH = "U8"
 
+VERSION = "1.1.0"
+GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
+
 # Krita's default 8-bit RGBA layers store pixels as straight (non-premultiplied)
 # BGRA bytes, which matches QImage.Format_ARGB32 byte-for-byte on little-endian.
 PIXEL_FORMAT = QImage.Format_ARGB32
