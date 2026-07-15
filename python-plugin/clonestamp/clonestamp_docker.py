@@ -212,6 +212,7 @@ class ClonestampDocker(DockWidget):
         self._stroke_active = False
         self._resize_active = False
         self._canvas_widget = None
+        self.brushStatusLabel.setText("")
 
     # --- event filter: only press/release are used; drag is timer-driven --
 
@@ -276,6 +277,7 @@ class ClonestampDocker(DockWidget):
                 core.begin_stroke(core.STATE, doc, doc_point)
                 self._stroke_active = True
                 self._timer.start()
+                self.brushStatusLabel.setText("Drag to paint...")
         except core.ClonestampError as e:
             self.brushStatusLabel.setText(str(e))
             self._warn(str(e))
@@ -287,7 +289,10 @@ class ClonestampDocker(DockWidget):
         if self._stroke_active:
             doc = Krita.instance().activeDocument()
             if doc is not None:
-                core.finalize_stroke(doc, core.STATE)
+                result = core.finalize_stroke(doc, core.STATE)
+                if result is not None:
+                    self.brushStatusLabel.setText(
+                        "Stroke painted at ({0}, {1})".format(result.x(), result.y()))
             core.end_stroke(core.STATE)
             self._stroke_active = False
         if self._resize_active:
@@ -329,7 +334,9 @@ class ClonestampDocker(DockWidget):
 
         doc = Krita.instance().activeDocument()
         try:
-            core.continue_stroke(doc, core.STATE, doc_point)
+            result = core.continue_stroke(doc, core.STATE, doc_point)
+            if result is None and self.brushStatusLabel.text() == "":
+                self.brushStatusLabel.setText("Painting...")
         except core.ClonestampError as e:
             self.brushStatusLabel.setText(str(e))
             self._stroke_active = False
