@@ -12,13 +12,17 @@ from PyQt5.QtGui import QImage, QPainter, QColor, QRadialGradient
 SUPPORTED_COLOR_MODEL = "RGBA"
 SUPPORTED_COLOR_DEPTH = "U8"
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
 
 # Krita's default 8-bit RGBA layers store pixels as straight (non-premultiplied)
 # BGRA bytes, which matches QImage.Format_ARGB32 byte-for-byte on little-endian.
 PIXEL_FORMAT = QImage.Format_ARGB32
 BLEND_FORMAT = QImage.Format_ARGB32_Premultiplied
+
+# Skip accumulator for canvases larger than this (pixel count) to avoid
+# excessive memory use -- falls back to per-dab direct writes.
+MAX_ACCUMULATOR_PIXELS = 50_000_000  # ~7000x7000
 
 
 class ClonestampError(Exception):
@@ -30,25 +34,33 @@ class ClonestampState:
 
     def __init__(self):
         self.source_node = None
-        self.source_point = None  # QPointF, document coordinates
+        self.source_point = None
         self.aligned = True
-        self.stroke_offset = None  # QPointF, recomputed per-stroke unless aligned
-        self.last_dab_point = None  # QPointF, for drag spacing/throttling
+        self.stroke_offset = None
+        self.last_dab_point = None
         self.brush_size = 50
         self.brush_hardness = 0.5
         self.brush_opacity = 100
-        # 'current' reads source_node's own device (default); 'all' reads
-        # the document's merged/composited projection via the root node,
-        # regardless of which single layer was Ctrl+clicked to set the point.
         self.sample_scope = "current"
+
+        # In-memory alpha-accumulator for the current stroke.
+        # Painted dabs record a soft white circle here instead of hitting
+        # the Krita node each time.  At stroke end the accumulated mask is
+        # composited onto the destination in a single pass.
+        self._acc_image = None
+        self._acc_left = 0
+        self._acc_top = 0
+        self._acc_bounds = None
 
     @property
     def has_point_source(self):
         return self.source_node is not None and self.source_point is not None
 
+    def clear_accumulator(self):
+        self._acc_image = None
+        self._acc_bounds = None
 
-# Module-level singleton so the docker's UI and the pure-logic functions
-# below always agree on the current brush/source state.
+
 STATE = ClonestampState()
 
 
@@ -69,49 +81,11 @@ def _ensure_color_space(node, action):
                     node.name(), node.colorModel(), node.colorDepth(), action))
 
 
-def _scale_alpha(image, factor):
-    if factor >= 1.0:
-        return
-    overlay = QImage(image.size(), PIXEL_FORMAT)
-    overlay.fill(QColor(0, 0, 0, max(0, min(255, int(255 * factor)))))
-    painter = QPainter(image)
-    painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-    painter.drawImage(0, 0, overlay)
-    painter.end()
-
-
-def _image_bytes(image):
-    image = image.convertToFormat(PIXEL_FORMAT)
-    ptr = image.constBits()
-    try:
-        nbytes = image.sizeInBytes()
-    except AttributeError:
-        nbytes = image.byteCount()
-    ptr.setsize(nbytes)
-    return QByteArray(bytes(ptr))
-
-
 # ---------------------------------------------------------------------------
-# Alt+click-to-sample / drag-to-paint brush flow.
-#
-# Confirmed working technique (Krita Artists forum "eventFiltter on the
-# canvas"): a QApplication-global event filter reliably sees MouseButtonPress/
-# Release for the canvas widget; continuous MouseMove during a drag is *not*
-# exposed to Python (a separate forum thread confirms Krita's internal
-# KisCanvasController.documentMousePositionChanged signal isn't hooked up to
-# scripting), so continuous painting is driven by a UI-side QTimer polling
-# QCursor.pos() instead of by move events. The functions below are the pure
-# logic; the docker owns the QApplication filter, the QTimer, and translating
-# QCursor.pos() into calls here.
+# Coordinate mapping
 # ---------------------------------------------------------------------------
 
 def map_widget_to_document(canvas, widget, local_pos):
-    """Best-effort widget-local pixel -> document pixel coordinate.
-
-    libkis's Canvas has no widgetToDocument() call, so this is reconstructed
-    from zoomLevel()/preferredCenter() and the widget's own size. Only exact
-    when the canvas isn't rotated or mirrored (check separately).
-    """
     zoom = canvas.zoomLevel()
     if not zoom:
         return None
@@ -124,12 +98,14 @@ def map_widget_to_document(canvas, widget, local_pos):
 
 
 def coordinate_mapping_reliable(canvas):
-    """False when canvas rotation/mirroring would break the linear mapping above."""
     return canvas.rotation() == 0 and not canvas.mirror()
 
 
+# ---------------------------------------------------------------------------
+# Sampling
+# ---------------------------------------------------------------------------
+
 def sample_source_point(doc, state, doc_point):
-    """Alt+click handler: remember (layer, point) as the clone source."""
     if doc is None:
         raise ClonestampError("No active document.")
     node = doc.activeNode()
@@ -140,26 +116,109 @@ def sample_source_point(doc, state, doc_point):
 
     state.source_node = node
     state.source_point = QPointF(doc_point)
-    state.stroke_offset = None  # force recompute at the next stroke
+    state.stroke_offset = None
     state.last_dab_point = None
     return node, state.source_point
 
 
-def begin_stroke(state, doc_point):
-    """Plain-click/press handler (once a source point exists): fixes the
-    source-to-destination offset for this stroke, per the Aligned/Non-Aligned
-    semantics GIMP/Photoshop use."""
+# ---------------------------------------------------------------------------
+# Accumulator helpers
+# ---------------------------------------------------------------------------
+
+def _ensure_accumulator(state, doc_bounds):
+    if state._acc_image is not None:
+        return True
+    w = doc_bounds.width()
+    h = doc_bounds.height()
+    if w <= 0 or h <= 0:
+        return False
+    if w * h > MAX_ACCUMULATOR_PIXELS:
+        return False
+    state._acc_image = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+    state._acc_image.fill(Qt.transparent)
+    state._acc_left = doc_bounds.x()
+    state._acc_top = doc_bounds.y()
+    state._acc_bounds = None
+    return True
+
+
+def _build_soft_circle(size, hardness, opacity_pct):
+    img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    img.fill(Qt.transparent)
+    painter = QPainter(img)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setPen(Qt.NoPen)
+
+    radius = size / 2.0
+    alpha_val = max(0, min(255, int(255 * opacity_pct / 100.0)))
+    grad = QRadialGradient(size / 2.0, size / 2.0, max(radius, 0.5))
+    grad.setColorAt(0.0, QColor(255, 255, 255, alpha_val))
+    grad.setColorAt(min(hardness, 0.999), QColor(255, 255, 255, alpha_val))
+    grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+    painter.setBrush(grad)
+    painter.drawEllipse(QRectF(0, 0, size, size))
+    painter.end()
+    return img
+
+
+def _paint_dab_to_accumulator(state, dst_center, size, hardness, opacity_pct):
+    if state._acc_image is None:
+        return False
+
+    half = size / 2.0
+    left = int(dst_center.x() - half)
+    top = int(dst_center.y() - half)
+    dab_rect = QRect(left, top, size, size)
+
+    if state._acc_bounds is None:
+        state._acc_bounds = QRect(dab_rect)
+    else:
+        state._acc_bounds = state._acc_bounds.united(dab_rect)
+
+    local_x = left - state._acc_left
+    local_y = top - state._acc_top
+    acc_w = state._acc_image.width()
+    acc_h = state._acc_image.height()
+
+    if local_x + size <= 0 or local_y + size <= 0:
+        return True
+    if local_x >= acc_w or local_y >= acc_h:
+        return True
+
+    clip = QRect(local_x, local_y, size, size).intersected(
+        QRect(0, 0, acc_w, acc_h))
+    if clip.isEmpty():
+        return True
+
+    circle = _build_soft_circle(size, hardness, opacity_pct)
+    src_clip = QRect(clip.x() - local_x, clip.y() - local_y,
+                     clip.width(), clip.height())
+
+    painter = QPainter(state._acc_image)
+    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+    painter.drawImage(clip.topLeft(), circle, src_clip)
+    painter.end()
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Stroke lifecycle
+# ---------------------------------------------------------------------------
+
+def begin_stroke(state, doc, doc_point):
     if not state.has_point_source:
-        raise ClonestampError("Alt+click on the canvas first to set a clone source.")
+        raise ClonestampError(
+            "Ctrl+click on the canvas first to set a clone source.")
     if not (state.aligned and state.stroke_offset is not None):
-        state.stroke_offset = QPointF(state.source_point.x() - doc_point.x(),
-                                       state.source_point.y() - doc_point.y())
+        state.stroke_offset = QPointF(
+            state.source_point.x() - doc_point.x(),
+            state.source_point.y() - doc_point.y())
     state.last_dab_point = None
+    state.clear_accumulator()
+    _ensure_accumulator(state, doc.bounds())
 
 
 def continue_stroke(doc, state, doc_point, min_spacing=2.0):
-    """Timer-tick handler while the button is held: stamps a round dab if the
-    cursor has moved far enough (in document pixels) since the last one."""
     if state.stroke_offset is None:
         return None
 
@@ -169,129 +228,125 @@ def continue_stroke(doc, state, doc_point, min_spacing=2.0):
         if (dx * dx + dy * dy) < (min_spacing * min_spacing):
             return None
 
-    dst_node = doc.activeNode()
-    src_center = QPointF(doc_point.x() + state.stroke_offset.x(),
-                          doc_point.y() + state.stroke_offset.y())
-    result = stamp_dab(doc, state.source_node, src_center, dst_node, doc_point,
-                        state.brush_size, state.brush_hardness, state.brush_opacity,
-                        state.sample_scope)
+    _paint_dab_to_accumulator(state, doc_point, state.brush_size,
+                               state.brush_hardness, state.brush_opacity)
     state.last_dab_point = QPointF(doc_point)
-    return result
+
+    src_center = QPointF(
+        doc_point.x() + state.stroke_offset.x(),
+        doc_point.y() + state.stroke_offset.y())
+    return src_center
 
 
 def end_stroke(state):
     state.last_dab_point = None
 
 
-def _build_radial_mask(w, h, hardness):
-    """A round mask: opaque out to `hardness` fraction of the radius, fading
-    to fully transparent at the edge -- the standard soft-brush falloff."""
-    mask = QImage(w, h, PIXEL_FORMAT)
-    mask.fill(0)
-    painter = QPainter(mask)
-    painter.setRenderHint(QPainter.Antialiasing, True)
-    painter.setPen(Qt.NoPen)
-
-    radius = min(w, h) / 2.0
-    hardness = max(0.0, min(1.0, hardness))
-    grad = QRadialGradient(w / 2.0, h / 2.0, max(radius, 0.5))
-    grad.setColorAt(0.0, QColor(255, 255, 255, 255))
-    grad.setColorAt(min(hardness, 0.999), QColor(255, 255, 255, 255))
-    grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-    painter.setBrush(grad)
-    painter.drawEllipse(QRectF(0, 0, w, h))
-    painter.end()
-    return mask
-
-
-def _apply_radial_mask(image, hardness):
-    mask = _build_radial_mask(image.width(), image.height(), hardness)
-    painter = QPainter(image)
-    painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-    painter.drawImage(0, 0, mask)
-    painter.end()
-
+# ---------------------------------------------------------------------------
+# Final composite -- one pass using the accumulated alpha mask
+# ---------------------------------------------------------------------------
 
 def _resolve_source(doc, src_node, sample_scope):
-    """Returns (read_fn, bounds) for the configured sample scope. read_fn(x,
-    y, w, h) -> QByteArray, matching Node.pixelData's signature.
-
-    'all' reads the document's merged/composited projection via the root
-    node's projectionPixelData() -- confirmed in Krita's own libkis source
-    (Node.cpp) to read node->projection(), the same merged view the native
-    C++ tool's image()->projection() uses; a plain pixelData() call on a
-    group/root node reads its paintDevice(), which is null for groups, so
-    projectionPixelData() is required here, not pixelData(). 'current'
-    reads src_node's own device, unchanged prior behavior."""
     if sample_scope == "all":
         root = doc.rootNode()
         return root.projectionPixelData, root.bounds()
     return src_node.pixelData, src_node.bounds()
 
 
-def stamp_dab(doc, src_node, src_center, dst_node, dst_center, size, hardness, opacity, sample_scope="current"):
-    """Stamp one round, soft-edged dab: read a `size`x`size` square centered
-    at `src_center`, mask+scale it, blend over the destination centered at
-    `dst_center`, write back in a single setPixelData call."""
-    _ensure_paint_layer(dst_node, "written to")
-    if dst_node.locked():
-        raise ClonestampError("Layer '{0}' is locked.".format(dst_node.name()))
-    _ensure_color_space(dst_node, "written to")
+def finalize_stroke(doc, state):
+    if state._acc_image is None or state._acc_bounds is None:
+        return None
 
-    if sample_scope == "all":
-        # The merged projection is always in the document's own base color
-        # space, which the destination-layer check above already confirmed
-        # is a supported space -- no separate source check needed.
-        pass
-    else:
+    dst_node = doc.activeNode()
+    if dst_node is None or dst_node.locked():
+        state.clear_accumulator()
+        return None
+
+    src_node = state.source_node
+    if src_node is None:
+        state.clear_accumulator()
+        return None
+
+    read_fn, src_bounds = _resolve_source(doc, src_node, state.sample_scope)
+    if state.sample_scope != "all":
         _ensure_paint_layer(src_node, "read from")
         _ensure_color_space(src_node, "read from")
-        if dst_node.colorModel() != src_node.colorModel() or dst_node.colorDepth() != src_node.colorDepth():
-            raise ClonestampError("Source and destination layers must have the same color model/depth.")
 
-    read_fn, src_bounds = _resolve_source(doc, src_node, sample_scope)
+    doc_bounds = doc.bounds()
+    mask_rect = state._acc_bounds.intersected(doc_bounds)
+    if mask_rect.isEmpty():
+        state.clear_accumulator()
+        return None
 
-    size = max(1, int(size))
-    half = size / 2.0
-    src_rect = QRect(int(round(src_center.x() - half)), int(round(src_center.y() - half)), size, size)
-    dst_rect = QRect(int(round(dst_center.x() - half)), int(round(dst_center.y() - half)), size, size)
+    # Source position = destination + stroke offset.
+    src_x = mask_rect.x() + int(round(state.stroke_offset.x()))
+    src_y = mask_rect.y() + int(round(state.stroke_offset.y()))
+    src_rect = QRect(src_x, src_y,
+                     mask_rect.width(), mask_rect.height()).intersected(src_bounds)
+    dst_rect = mask_rect.intersected(dst_node.bounds())
 
-    src_clip = src_rect.intersected(src_bounds)
-    dst_clip = dst_rect.intersected(dst_node.bounds())
+    if src_rect.isEmpty() or dst_rect.isEmpty():
+        state.clear_accumulator()
+        return None
 
-    # Shrink both rects by whichever side needs it more, so they stay the
-    # same size and pixel-aligned even when one side runs off its layer.
-    left = max(src_clip.left() - src_rect.left(), dst_clip.left() - dst_rect.left())
-    top = max(src_clip.top() - src_rect.top(), dst_clip.top() - dst_rect.top())
-    right = max(src_rect.right() - src_clip.right(), dst_rect.right() - dst_clip.right())
-    bottom = max(src_rect.bottom() - src_clip.bottom(), dst_rect.bottom() - dst_clip.bottom())
+    final_w = min(src_rect.width(), dst_rect.width())
+    final_h = min(src_rect.height(), dst_rect.height())
+    if final_w <= 0 or final_h <= 0:
+        state.clear_accumulator()
+        return None
 
-    w = size - left - right
-    h = size - top - bottom
-    if w <= 0 or h <= 0:
-        return None  # entirely off one of the two layers; skip this dab
+    src_rect.setWidth(final_w)
+    src_rect.setHeight(final_h)
+    dst_rect.setWidth(final_w)
+    dst_rect.setHeight(final_h)
 
-    src_x, src_y = src_rect.x() + left, src_rect.y() + top
-    dst_x, dst_y = dst_rect.x() + left, dst_rect.y() + top
+    # Slice the accumulator at the mask_rect origin, offset to dst_rect.
+    mask_sx = dst_rect.x() - state._acc_bounds.x()
+    mask_sy = dst_rect.y() - state._acc_bounds.y()
 
-    src_bytes = read_fn(src_x, src_y, w, h)
-    src_image = QImage(src_bytes, w, h, PIXEL_FORMAT).convertToFormat(BLEND_FORMAT)
+    # Read source.
+    src_bytes = read_fn(src_rect.x(), src_rect.y(), final_w, final_h)
+    src_image = QImage(src_bytes, final_w, final_h, PIXEL_FORMAT)
+    src_image = src_image.convertToFormat(BLEND_FORMAT)
 
-    dst_bytes = dst_node.pixelData(dst_x, dst_y, w, h)
-    dst_image = QImage(dst_bytes, w, h, PIXEL_FORMAT).convertToFormat(BLEND_FORMAT)
+    # Read destination.
+    dst_bytes = dst_node.pixelData(dst_rect.x(), dst_rect.y(), final_w, final_h)
+    dst_image = QImage(dst_bytes, final_w, final_h, PIXEL_FORMAT)
+    dst_image = dst_image.convertToFormat(BLEND_FORMAT)
 
-    _apply_radial_mask(src_image, hardness)
-    _scale_alpha(src_image, opacity / 100.0)
+    # Read mask slice.
+    mask_image = state._acc_image.copy(mask_sx, mask_sy, final_w, final_h)
 
+    # Step 1: multiply source by mask alpha (DestinationIn).
+    painter = QPainter(src_image)
+    painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+    painter.drawImage(0, 0, mask_image)
+    painter.end()
+
+    # Step 2: composite masked source over destination (SourceOver).
     painter = QPainter(dst_image)
     painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
     painter.drawImage(0, 0, src_image)
     painter.end()
 
+    # Write back.
     result_bytes = _image_bytes(dst_image)
-    ok = dst_node.setPixelData(result_bytes, dst_x, dst_y, w, h)
-    if not ok:
-        raise ClonestampError("Failed to write pixel data to '{0}'.".format(dst_node.name()))
-
+    ok = dst_node.setPixelData(result_bytes,
+                                dst_rect.x(), dst_rect.y(), final_w, final_h)
     doc.refreshProjection()
-    return QRect(dst_x, dst_y, w, h)
+    state.clear_accumulator()
+    if not ok:
+        raise ClonestampError(
+            "Failed to write pixel data to '{0}'.".format(dst_node.name()))
+    return dst_rect
+
+
+def _image_bytes(image):
+    image = image.convertToFormat(PIXEL_FORMAT)
+    ptr = image.constBits()
+    try:
+        nbytes = image.sizeInBytes()
+    except AttributeError:
+        nbytes = image.byteCount()
+    ptr.setsize(nbytes)
+    return QByteArray(bytes(ptr))

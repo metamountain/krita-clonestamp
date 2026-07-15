@@ -37,8 +37,10 @@ class ClonestampDocker(DockWidget):
         self._resize_start_global = None
         self._resize_start_size = None
         self._timer = QTimer(self)
-        self._timer.setInterval(40)  # ~25Hz polling of QCursor.pos()
+        self._timer.setInterval(30)  # ~33Hz polling of QCursor.pos()
         self._timer.timeout.connect(self._onTimerTick)
+        self._last_cursor_zoom = -1.0
+        self._last_cursor_size = -1
 
         widget = QWidget()
         layout = QVBoxLayout()
@@ -194,6 +196,10 @@ class ClonestampDocker(DockWidget):
         # *inside* eventFilter, not a narrower install target.
         QApplication.instance().installEventFilter(self)
         self._updateBrushCursor()
+        canvas = self._currentCanvas()
+        if canvas:
+            self._last_cursor_zoom = canvas.zoomLevel()
+        self._last_cursor_size = core.STATE.brush_size
         if core.STATE.has_point_source:
             self._timer.start()
         self.brushStatusLabel.setText("Clone Brush enabled.")
@@ -240,12 +246,11 @@ class ClonestampDocker(DockWidget):
         if event.button() != Qt.LeftButton:
             return False  # only left-click is ours; right/middle pass through untouched
 
-        # libkis's Canvas exposes no zoomChanged signal to listen for, so the
-        # cursor ring (scaled by zoom -- see _updateBrushCursor) can only go
-        # stale if the user zooms without touching Size/Hardness/resize.
-        # Refreshing here, at the moment they actually start interacting,
-        # covers that without adding another poll loop.
         self._updateBrushCursor()
+        canvas = self._currentCanvas()
+        if canvas:
+            self._last_cursor_zoom = canvas.zoomLevel()
+        self._last_cursor_size = core.STATE.brush_size
 
         mods = event.modifiers()
 
@@ -280,11 +285,19 @@ class ClonestampDocker(DockWidget):
         if event.button() != Qt.LeftButton:
             return False
         if self._stroke_active:
+            doc = Krita.instance().activeDocument()
+            if doc is not None:
+                core.finalize_stroke(doc, core.STATE)
             core.end_stroke(core.STATE)
             self._stroke_active = False
-            # timer keeps running: hover-preview continues after the stroke
         if self._resize_active:
             self._resize_active = False
+            cursor_brush_status = (
+                "Size: {0} px  Hardness: {1}%  Opacity: {2}%"
+                .format(core.STATE.brush_size,
+                        int(round(core.STATE.brush_hardness * 100)),
+                        core.STATE.brush_opacity))
+            self.brushStatusLabel.setText(cursor_brush_status)
             self._updateBrushCursor()
         return True
 
@@ -320,6 +333,15 @@ class ClonestampDocker(DockWidget):
         except core.ClonestampError as e:
             self.brushStatusLabel.setText(str(e))
             self._stroke_active = False
+            return
+
+        # Refresh cursor if zoom or brush size changed since last paint.
+        zoom = canvas.zoomLevel() if canvas else 1.0
+        if (abs(zoom - self._last_cursor_zoom) > 0.01 or
+                core.STATE.brush_size != self._last_cursor_size):
+            self._last_cursor_zoom = zoom
+            self._last_cursor_size = core.STATE.brush_size
+            self._updateBrushCursor()
 
     def _onResizeTick(self):
         current = QCursor.pos()
@@ -353,13 +375,8 @@ class ClonestampDocker(DockWidget):
         """Sets the canvas cursor to a ring matching the current brush size
         (in screen pixels, accounting for zoom) -- Krita's own brush-outline
         cursor doesn't apply while another tool is active underneath ours.
-        Also draws a dimmer inner ring scaled by hardness (large/near the
-        outer ring = hard edge, small/near the center = soft falloff), since
-        this is the only safe place left to show hardness at all -- a
-        floating preview window would give a nicer live patch preview, but
-        that's exactly the mechanism that froze Krita (see _onTimerTick).
-        This is a plain cursor bitmap, set once per resize, not a
-        continuously-repositioned window, so it doesn't carry that risk."""
+        Draws a semi-transparent fill showing the softness gradient and a
+        solid inner ring marking the fully-opaque zone."""
         if self._canvas_widget is None:
             return
         canvas = self._currentCanvas()
@@ -371,16 +388,31 @@ class ClonestampDocker(DockWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setBrush(Qt.NoBrush)
 
+        # Filled radial gradient to show softness falloff (very faint).
+        if core.STATE.brush_hardness < 1.0:
+            grad = QRadialGradient((diameter + 2) / 2.0, (diameter + 2) / 2.0,
+                                    (diameter + 2) / 2.0)
+            grad.setColorAt(0.0, QColor(255, 255, 255, 12))
+            grad.setColorAt(float(core.STATE.brush_hardness),
+                            QColor(255, 255, 255, 12))
+            grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+            painter.setBrush(grad)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(1, 1, diameter, diameter)
+
+        # Outer ring (full brush extent).
+        painter.setBrush(Qt.NoBrush)
         painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
         painter.drawEllipse(1, 1, diameter, diameter)
         painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
         painter.drawEllipse(0, 0, diameter, diameter)
 
-        hardness_diameter = max(2, int(diameter * core.STATE.brush_hardness))
+        # Inner ring (fully-opaque zone boundary).
+        hardness_diameter = max(3, int(diameter * core.STATE.brush_hardness))
         inset = (diameter - hardness_diameter) // 2
-        painter.setPen(QPen(QColor(0, 0, 0, 140), 1, Qt.DashLine))
+        painter.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt.DashLine))
         painter.drawEllipse(inset + 1, inset + 1, hardness_diameter, hardness_diameter)
-        painter.setPen(QPen(QColor(255, 255, 255, 140), 1, Qt.DashLine))
+        painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.DashLine))
         painter.drawEllipse(inset, inset, hardness_diameter, hardness_diameter)
 
         painter.end()
