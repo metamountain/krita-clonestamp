@@ -321,6 +321,7 @@ def finalize_stroke(doc, state):
     dst_clip = dst_full.intersected(dst_node.bounds())
 
     if src_clip.isEmpty() or dst_clip.isEmpty():
+        _debug("finalize_stroke: src_clip=%s dst_clip=%s EMPTY -- abort" % (src_clip, dst_clip))
         state.clear_accumulator()
         return None
 
@@ -336,11 +337,13 @@ def finalize_stroke(doc, state):
     final_w = mask_rect.width() - left - right
     final_h = mask_rect.height() - top - bottom
     if final_w <= 0 or final_h <= 0:
+        _debug("finalize_stroke: final rect is empty (%dx%d)" % (final_w, final_h))
         state.clear_accumulator()
         return None
 
     src_rect = QRect(src_full.x() + left, src_full.y() + top, final_w, final_h)
     dst_rect = QRect(dst_full.x() + left, dst_full.y() + top, final_w, final_h)
+    _debug("finalize_stroke: src_rect=%s dst_rect=%s" % (src_rect, dst_rect))
 
     # Slice the accumulator: _acc_left/_acc_top is the accumulator origin
     # (= document origin), not _acc_bounds.
@@ -359,6 +362,8 @@ def finalize_stroke(doc, state):
 
     # Read mask slice.
     mask_image = state._acc_image.copy(mask_sx, mask_sy, final_w, final_h)
+    _debug("finalize_stroke: mask slice size=%dx%d null=%s" % (
+        mask_image.width(), mask_image.height(), mask_image.isNull()))
 
     # Step 1: multiply source by mask alpha (DestinationIn).
     painter = QPainter(src_image)
@@ -374,9 +379,12 @@ def finalize_stroke(doc, state):
 
     # Write back.
     result_bytes = _image_bytes(dst_image)
+    _debug("finalize_stroke: write %d bytes @ (%d,%d) %dx%d" % (
+        len(result_bytes), dst_rect.x(), dst_rect.y(), final_w, final_h))
     ok = dst_node.setPixelData(result_bytes,
                                 dst_rect.x(), dst_rect.y(), final_w, final_h)
     doc.refreshProjection()
+    _debug("finalize_stroke: setPixelData ok=%s" % ok)
     state.clear_accumulator()
     if not ok:
         raise ClonestampError(
