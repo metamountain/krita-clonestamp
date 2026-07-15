@@ -300,9 +300,10 @@ def finalize_stroke(doc, state):
     dst_rect.setWidth(final_w)
     dst_rect.setHeight(final_h)
 
-    # Slice the accumulator at the mask_rect origin, offset to dst_rect.
-    mask_sx = dst_rect.x() - state._acc_bounds.x()
-    mask_sy = dst_rect.y() - state._acc_bounds.y()
+    # Slice the accumulator: _acc_left/_acc_top is the accumulator origin
+    # (= document origin), not _acc_bounds.
+    mask_sx = dst_rect.x() - state._acc_left
+    mask_sy = dst_rect.y() - state._acc_top
 
     # Read source.
     src_bytes = read_fn(src_rect.x(), src_rect.y(), final_w, final_h)
