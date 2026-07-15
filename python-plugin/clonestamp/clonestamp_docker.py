@@ -71,6 +71,7 @@ class ClonestampDocker(DockWidget):
         # plausible source of an early freeze. Only ever needed once the
         # user actually enables the brush.
         self._preview = None
+        self._last_preview_screen_pos = None
         self._timer = QTimer(self)
         self._timer.setInterval(40)  # ~25Hz polling of QCursor.pos()
         self._timer.timeout.connect(self._onTimerTick)
@@ -223,6 +224,7 @@ class ClonestampDocker(DockWidget):
         self._stroke_active = False
         self._resize_active = False
         self._canvas_widget = None
+        self._last_preview_screen_pos = None
         if self._preview is not None:
             self._preview.hide()
 
@@ -342,13 +344,25 @@ class ClonestampDocker(DockWidget):
             self._updatePreview(doc, core.STATE.source_node, core.STATE.source_point, diameter)
 
     def _updatePreview(self, doc, src_node, src_center, diameter):
+        # Throttle by actual cursor movement, not just timer tick: at 25Hz,
+        # re-reading document pixels *and* repositioning an always-on-top
+        # window on every single tick -- even while the cursor sits still --
+        # is a lot of repeated work for zero visible change, and was the
+        # likely cause of a severe freeze during live testing. A few pixels
+        # of preview lag is imperceptible; skipping redundant updates isn't.
+        screen_pos = QCursor.pos()
+        if (self._last_preview_screen_pos is not None
+                and (screen_pos - self._last_preview_screen_pos).manhattanLength() < 3):
+            return
+        self._last_preview_screen_pos = screen_pos
+
         image = core.read_preview_patch(doc, src_node, src_center, core.STATE.brush_size,
                                          core.STATE.brush_hardness, core.STATE.sample_scope)
         if image is None:
             self._preview.hide()
             return
         radius = diameter // 2
-        pos = QCursor.pos() - QPoint(radius, radius)
+        pos = screen_pos - QPoint(radius, radius)
         self._preview.setImage(image)
         self._preview.setGeometry(pos.x(), pos.y(), diameter, diameter)
         if not self._preview.isVisible():
