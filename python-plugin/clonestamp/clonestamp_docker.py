@@ -5,8 +5,8 @@ from krita import DockWidget, Krita
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QTimer, Qt
 from PyQt5.QtGui import QColor, QCursor, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QOpenGLWidget,
-    QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QOpenGLWidget,
+    QSpinBox, QVBoxLayout, QWidget,
 )
 
 from . import clonestamp_core as core
@@ -136,72 +136,10 @@ class ClonestampDocker(DockWidget):
         self.brushStatusLabel.setWordWrap(True)
         layout.addWidget(self.brushStatusLabel)
 
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        layout.addWidget(divider)
-
-        # --- Fallback: manual selection-based capture/stamp (precision use) ---
-        layout.addWidget(QLabel("Manual (selection-based, for precision placement):"))
-
-        self.captureButton = QPushButton("Capture Source")
-        self.captureButton.clicked.connect(self.onCaptureSource)
-        layout.addWidget(self.captureButton)
-
-        self.sourceLabel = QLabel("Source: none")
-        self.sourceLabel.setWordWrap(True)
-        layout.addWidget(self.sourceLabel)
-
-        self.useSelectionCheck = QCheckBox("Use current selection as destination")
-        self.useSelectionCheck.setChecked(True)
-        self.useSelectionCheck.toggled.connect(self.onUseSelectionToggled)
-        layout.addWidget(self.useSelectionCheck)
-
-        destRow = QHBoxLayout()
-        destRow.addWidget(QLabel("X:"))
-        self.destXSpin = QSpinBox()
-        self.destXSpin.setRange(0, 100000)
-        self.destXSpin.setEnabled(False)
-        destRow.addWidget(self.destXSpin)
-        destRow.addWidget(QLabel("Y:"))
-        self.destYSpin = QSpinBox()
-        self.destYSpin.setRange(0, 100000)
-        self.destYSpin.setEnabled(False)
-        destRow.addWidget(self.destYSpin)
-        layout.addLayout(destRow)
-
-        featherRow = QHBoxLayout()
-        featherRow.addWidget(QLabel("Feather:"))
-        self.featherSpin = QSpinBox()
-        self.featherSpin.setRange(0, 64)
-        self.featherSpin.setValue(core.STATE.last_feather)
-        self.featherSpin.setSuffix(" px")
-        featherRow.addWidget(self.featherSpin)
-        layout.addLayout(featherRow)
-
-        opacityRow = QHBoxLayout()
-        opacityRow.addWidget(QLabel("Opacity:"))
-        self.opacitySpin = QSpinBox()
-        self.opacitySpin.setRange(0, 100)
-        self.opacitySpin.setValue(core.STATE.last_opacity)
-        self.opacitySpin.setSuffix(" %")
-        opacityRow.addWidget(self.opacitySpin)
-        layout.addLayout(opacityRow)
-
-        self.stampButton = QPushButton("Stamp")
-        self.stampButton.setEnabled(core.STATE.has_source)
-        self.stampButton.clicked.connect(self.onStamp)
-        layout.addWidget(self.stampButton)
-
-        self.statusLabel = QLabel("")
-        self.statusLabel.setWordWrap(True)
-        layout.addWidget(self.statusLabel)
-
         layout.addStretch()
         widget.setLayout(layout)
         self.setWidget(widget)
 
-        if core.STATE.has_source:
-            self._describeSource(core.STATE.src_node, core.STATE.src_rect)
         if core.STATE.has_point_source:
             self._describeLiveSource()
 
@@ -447,44 +385,6 @@ class ClonestampDocker(DockWidget):
         painter.end()
         center = (diameter + 2) // 2
         self._canvas_widget.setCursor(QCursor(pixmap, center, center))
-
-    # --- manual (selection-based) fallback --------------------------------
-
-    def onUseSelectionToggled(self, checked):
-        self.destXSpin.setEnabled(not checked)
-        self.destYSpin.setEnabled(not checked)
-
-    def _describeSource(self, node, rect):
-        self.sourceLabel.setText(
-            "Source: layer '{0}', {1}x{2} @ ({3},{4})".format(
-                node.name(), rect.width(), rect.height(), rect.x(), rect.y()))
-
-    def onCaptureSource(self):
-        doc = Krita.instance().activeDocument()
-        try:
-            rect = core.capture_source(doc, core.STATE)
-            self._describeSource(core.STATE.src_node, rect)
-            self.stampButton.setEnabled(True)
-            self.statusLabel.setText("")
-        except core.ClonestampError as e:
-            self.statusLabel.setText(str(e))
-            self._warn(str(e))
-
-    def onStamp(self):
-        doc = Krita.instance().activeDocument()
-        try:
-            core.stamp(
-                doc, core.STATE,
-                self.useSelectionCheck.isChecked(),
-                self.destXSpin.value(), self.destYSpin.value(),
-                self.featherSpin.value(), self.opacitySpin.value())
-            self.statusLabel.setText("Stamped.")
-        except core.ClonestampError as e:
-            self.statusLabel.setText(str(e))
-            self._warn(str(e))
-        except Exception as e:
-            self.statusLabel.setText("Unexpected error: {0}".format(e))
-            self._warn(str(e))
 
     def _warn(self, message):
         window = Krita.instance().activeWindow()

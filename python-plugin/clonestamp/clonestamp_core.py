@@ -23,17 +23,9 @@ class ClonestampError(Exception):
 
 
 class ClonestampState:
-    """Shared between the Extension and the DockWidget (both are separately
-    instantiated by pykrita but need to agree on what source was captured)."""
+    """Shared state for the Ctrl+click sample / drag-to-paint brush flow."""
 
     def __init__(self):
-        self.src_node = None
-        self.src_rect = None  # QRect, document coordinates
-        self.last_feather = 0
-        self.last_opacity = 100
-
-        # Alt+click / drag brush flow (separate from the selection-based
-        # capture above; a point + running offset, not a rectangle).
         self.source_node = None
         self.source_point = None  # QPointF, document coordinates
         self.aligned = True
@@ -48,22 +40,12 @@ class ClonestampState:
         self.sample_scope = "current"
 
     @property
-    def has_source(self):
-        return (self.src_node is not None
-                and self.src_rect is not None
-                and not self.src_rect.isEmpty())
-
-    @property
     def has_point_source(self):
         return self.source_node is not None and self.source_point is not None
 
-    def clear(self):
-        self.src_node = None
-        self.src_rect = None
 
-
-# Module-level singleton so the extension's keyboard-shortcut actions and the
-# docker's buttons always see the same captured source.
+# Module-level singleton so the docker's UI and the pure-logic functions
+# below always agree on the current brush/source state.
 STATE = ClonestampState()
 
 
@@ -82,77 +64,6 @@ def _ensure_color_space(node, action):
             "Clone Stamp only supports {0}/{1} layers; '{2}' is {3}/{4} and can't be {5}."
             .format(SUPPORTED_COLOR_MODEL, SUPPORTED_COLOR_DEPTH,
                     node.name(), node.colorModel(), node.colorDepth(), action))
-
-
-def capture_source(doc, state):
-    """Capture the active selection on the active layer as the clone source."""
-    if doc is None:
-        raise ClonestampError("No active document.")
-
-    selection = doc.selection()
-    if selection is None or selection.width() <= 0 or selection.height() <= 0:
-        raise ClonestampError(
-            "Make a selection with the Rectangle/Elliptical Select tool first, then Capture Source.")
-
-    node = doc.activeNode()
-    _ensure_paint_layer(node, "read from")
-    _ensure_color_space(node, "read from")
-
-    if node.locked():
-        raise ClonestampError("Layer '{0}' is locked.".format(node.name()))
-
-    rect = QRect(selection.x(), selection.y(), selection.width(), selection.height())
-    rect = rect.intersected(node.bounds())
-    if rect.isEmpty():
-        raise ClonestampError("Selection does not overlap the active layer's content.")
-
-    state.src_node = node
-    state.src_rect = QRect(rect)
-    return rect
-
-
-def _destination_anchor(doc, use_selection, dest_x, dest_y):
-    if use_selection:
-        selection = doc.selection()
-        if selection is None or selection.width() <= 0 or selection.height() <= 0:
-            raise ClonestampError(
-                "No active selection to use as the destination; either make one or "
-                "uncheck 'Use current selection as destination' and enter X/Y manually.")
-        return selection.x(), selection.y()
-    return dest_x, dest_y
-
-
-def _build_feather_mask(w, h, feather):
-    """A white mask, alpha rising from 0 at the edge to 255 by `feather` px in."""
-    mask = QImage(w, h, PIXEL_FORMAT)
-    if feather <= 0:
-        mask.fill(QColor(255, 255, 255, 255))
-        return mask
-
-    mask.fill(0)
-    painter = QPainter(mask)
-    painter.setRenderHint(QPainter.Antialiasing, True)
-    painter.setPen(Qt.NoPen)
-
-    steps = max(1, min(int(feather), 32))
-    for step in range(1, steps + 1):
-        inset = int(feather * (step - 1) / steps)  # grows with step: 0 .. <feather
-        alpha = int(255 * step / steps)  # grows with step: low .. 255
-        rw = max(1, w - 2 * inset)
-        rh = max(1, h - 2 * inset)
-        painter.fillRect(QRect(inset, inset, rw, rh), QColor(255, 255, 255, alpha))
-    painter.end()
-    return mask
-
-
-def _apply_feather(image, feather):
-    if feather <= 0:
-        return
-    mask = _build_feather_mask(image.width(), image.height(), feather)
-    painter = QPainter(image)
-    painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-    painter.drawImage(0, 0, mask)
-    painter.end()
 
 
 def _scale_alpha(image, factor):
@@ -175,66 +86,6 @@ def _image_bytes(image):
         nbytes = image.byteCount()
     ptr.setsize(nbytes)
     return QByteArray(bytes(ptr))
-
-
-def stamp(doc, state, use_selection, dest_x, dest_y, feather, opacity):
-    """Read the captured source, blend it (feather + opacity), write it at the
-    destination in a single setPixelData call (== a single undo step)."""
-    if not state.has_source:
-        raise ClonestampError("Capture a source region first.")
-    if doc is None:
-        raise ClonestampError("No active document.")
-
-    dst_node = doc.activeNode()
-    _ensure_paint_layer(dst_node, "written to")
-    if dst_node.locked():
-        raise ClonestampError("Layer '{0}' is locked.".format(dst_node.name()))
-    _ensure_color_space(dst_node, "written to")
-
-    if (dst_node.colorModel() != state.src_node.colorModel()
-            or dst_node.colorDepth() != state.src_node.colorDepth()):
-        raise ClonestampError("Source and destination layers must have the same color model/depth.")
-
-    x, y = _destination_anchor(doc, use_selection, dest_x, dest_y)
-
-    src_rect = QRect(state.src_rect)
-    dst_rect = QRect(x, y, src_rect.width(), src_rect.height()).intersected(dst_node.bounds())
-    if dst_rect.isEmpty():
-        raise ClonestampError("Destination is entirely outside the active layer's bounds.")
-
-    if dst_rect.width() != src_rect.width() or dst_rect.height() != src_rect.height():
-        # Destination got clipped by the layer edge; shrink the source rect
-        # from the same edges so the two stay the same size.
-        dx = dst_rect.x() - x
-        dy = dst_rect.y() - y
-        src_rect = QRect(src_rect.x() + dx, src_rect.y() + dy, dst_rect.width(), dst_rect.height())
-
-    w, h = src_rect.width(), src_rect.height()
-
-    src_bytes = state.src_node.pixelData(src_rect.x(), src_rect.y(), w, h)
-    src_image = QImage(src_bytes, w, h, PIXEL_FORMAT).convertToFormat(BLEND_FORMAT)
-
-    dst_bytes = dst_node.pixelData(dst_rect.x(), dst_rect.y(), w, h)
-    dst_image = QImage(dst_bytes, w, h, PIXEL_FORMAT).convertToFormat(BLEND_FORMAT)
-
-    _apply_feather(src_image, feather)
-    _scale_alpha(src_image, opacity / 100.0)
-
-    painter = QPainter(dst_image)
-    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-    painter.drawImage(0, 0, src_image)
-    painter.end()
-
-    result_bytes = _image_bytes(dst_image)
-
-    ok = dst_node.setPixelData(result_bytes, dst_rect.x(), dst_rect.y(), w, h)
-    if not ok:
-        raise ClonestampError("Failed to write pixel data to '{0}'.".format(dst_node.name()))
-
-    doc.refreshProjection()
-    state.last_feather = feather
-    state.last_opacity = opacity
-    return dst_rect
 
 
 # ---------------------------------------------------------------------------
