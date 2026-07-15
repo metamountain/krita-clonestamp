@@ -36,10 +36,12 @@ exactly how this was put together, including the mistakes and dead ends.
 
 ## Installing the tool (normal users, no build required)
 
-1. Download this repository (or just the `python-plugin/` folder) as a
-   `.zip`.
+1. Download **[clonestamp.zip](https://github.com/metamountain/krita-clonestamp/releases/latest/download/clonestamp.zip)**
+   from the latest release (a ready-to-import zip of just the plugin —
+   not the whole repository).
 2. In Krita: **Tools › Scripts › Import Python Plugin from File...**, and
-   select the zip.
+   select the zip you downloaded. (Krita also has **Import Python Plugin
+   from Web...**, which accepts that same direct zip URL pasted in.)
 3. Restart Krita. Open the **Clonestamp Tool with Preview** docker
    (Settings › Dockers), check **Enable Clone Brush**.
 4. Ctrl+click on the canvas to sample a source point, then click and drag
@@ -47,7 +49,10 @@ exactly how this was put together, including the mistakes and dead ends.
    hardness (vertical, drag up for harder edges, down for softer).
 
 This works against any reasonably recent existing Krita install — no
-custom build needed.
+custom build needed. (The `python-plugin/clonestamp/` folder in this repo
+is the source the release zip is built from, structured to match exactly
+what Krita's own plugin importer expects — a folder named after the
+plugin, containing `__init__.py` and the `.desktop` file.)
 
 ## Why two implementations?
 
