@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: CC0-1.0
 # SPDX-FileCopyrightText: 2026 metamountain <mail@metamountain.net>
 
-import time
 import traceback
 from krita import DockWidget, Krita
 from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt, QUrl
@@ -80,12 +79,6 @@ class ClonestampDocker(DockWidget):
         self._last_cursor_zoom = -1.0
         self._last_cursor_size = -1
         self._tick_counter = 0
-        # Per-stroke MouseMove diagnostics (counted in memory, flushed as ONE
-        # debug line on release -- never per-event disk writes).
-        self._move_count = 0
-        self._move_first_t = 0.0
-        self._move_last_t = 0.0
-        self._last_move_cursor_t = 0.0
         self._crosshair = SourceCrosshair()
 
         widget = QWidget()
@@ -272,8 +265,7 @@ class ClonestampDocker(DockWidget):
         self._canvas_widget = None
         self.brushStatusLabel.setText("")
 
-    # --- event filter: press/release start/end strokes; MouseMove drives the
-    # cursor crosshair during a drag (paint dabs stay on the 30ms timer) ----
+    # --- event filter: only press/release are used; drag is timer-driven --
 
     def eventFilter(self, obj, event):
         if obj is not self._canvas_widget:
@@ -285,8 +277,6 @@ class ClonestampDocker(DockWidget):
                 return self._onCanvasPress(event)
             elif et == QEvent.MouseButtonRelease:
                 return self._onCanvasRelease(event)
-            elif et == QEvent.MouseMove:
-                return self._onCanvasMove(event)
         except Exception as e:
             # Exceptions are rare and always worth a trace, even with the
             # debug gate off -- hence force=True.
@@ -348,8 +338,6 @@ class ClonestampDocker(DockWidget):
                 core.begin_stroke(core.STATE, doc, doc_point)
                 self._stroke_active = True
                 self._tick_counter = 0
-                self._move_count = 0
-                self._last_move_cursor_t = 0.0
                 self._crosshair.hide()
                 self._ch_timer.stop()
                 self._timer.start()
@@ -359,53 +347,11 @@ class ClonestampDocker(DockWidget):
             self._warn(str(e))
         return True
 
-    def _onCanvasMove(self, event):
-        # Only intercept moves during an active paint drag. Resize (Shift+drag)
-        # stays entirely on the timer/QCursor.pos() path, and hover moves pass
-        # through untouched so Krita behaves normally.
-        if not self._stroke_active or self._resize_active:
-            return False
-
-        # Diagnostics: count in memory only; _onCanvasRelease flushes one
-        # summary line. Answers whether Qt delivers MouseMove to a global
-        # event filter on this canvas at all, and at what rate.
-        now = time.perf_counter()
-        if self._move_count == 0:
-            self._move_first_t = now
-        self._move_count += 1
-        self._move_last_t = now
-
-        # Reposition the cursor crosshair from the event's own coordinates
-        # (no mapFromGlobal/poll roundtrip), throttled so a high-report-rate
-        # mouse can't queue up expensive pixmap rebuilds. Painting itself is
-        # untouched -- continue_stroke stays on the 30ms timer.
-        if core.STATE.has_point_source and \
-                now - self._last_move_cursor_t >= 0.015:
-            doc_point = self._mapEventPos(event)
-            if doc_point is not None:
-                self._last_move_cursor_t = now
-                self._updateBrushCursor(doc_point)
-
-        # Consume, mirroring press/release: the press was consumed, so the
-        # underlying Krita tool has no stroke that needs these moves.
-        return True
-
     def _onCanvasRelease(self, event):
         _debug("_onCanvasRelease: button=%d stroke_active=%s" % (event.button(), self._stroke_active))
         if event.button() != Qt.LeftButton:
             return False
         if self._stroke_active:
-            # One-line MouseMove-rate summary per stroke (force=True: this is
-            # the measurement that decides whether event-driven tracking works
-            # on this system, so it logs even with the debug gate off).
-            if self._move_count > 1:
-                span_ms = (self._move_last_t - self._move_first_t) * 1000.0
-                avg_ms = span_ms / (self._move_count - 1)
-                _debug("stroke moves: n=%d avg_dt=%.1fms span=%.0fms"
-                       % (self._move_count, avg_ms, span_ms), force=True)
-            else:
-                _debug("stroke moves: n=%d (MouseMove not reaching filter?)"
-                       % self._move_count, force=True)
             doc = Krita.instance().activeDocument()
             if doc is not None:
                 result = core.finalize_stroke(doc, core.STATE)
