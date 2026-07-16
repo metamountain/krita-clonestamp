@@ -7,20 +7,25 @@ native tool today — this project adds it.
 
 ## Status and an honest disclosure
 
-This was built by **metamountain**, who is **not a programmer**, working
-with AI pair-programming assistance (Claude Code). The working prototype
-here is real and has been hands-on tested, but the author cannot personally
-review, maintain, or extend this code at the level a project like this
-eventually needs — especially the native C++ half, which would need to go
-through Krita's own upstream code review to ever ship inside Krita itself.
+Hi, I'm **metamountain**, and I am, in the most literal sense of the word,
+not a programmer. I got tired of Krita not having a Clone Stamp tool, so
+instead of learning C++ like a reasonable person I argued with an AI
+(Claude Code) until it produced one. It works. I've painted with it, I've
+resized brushes with it, I've watched it not crash for hours at a time,
+which by my standards is a shipping product. That said, I want to be
+upfront: I can drive this code, but I cannot read most of it, and I
+definitely can't defend it in an upstream Krita code review — especially
+the native C++ half, which would need to survive contact with people who
+actually know what a `KisTool` is supposed to look like.
 
-**If you're an experienced Krita, Qt, or KDE developer and this looks
-interesting: your help would genuinely make the difference between this
-staying a personal prototype and it becoming something real.** That could
-mean reviewing/cleaning up the code, taking over maintenance, or helping
-shepherd a submission through Krita's own contribution process. See
-`docs/` for the full build/debugging history — it's a detailed trail of
-exactly how this was put together, including the mistakes and dead ends.
+**So if you're an experienced Krita, Qt, or KDE developer and this tickles
+your brain in the right way: come save this thing from staying a permanent
+tech demo.** Reviewing the code, cleaning it up, taking over maintenance,
+or shepherding a real submission through Krita's contribution process would
+all turn this from "some guy's AI-assisted weekend project" into something
+that ships. Check `docs/` for the full build/debugging trail — every dead
+end, every 2am bug, all logged in more detail than most of my actual life
+decisions.
 
 ## What's in this repo
 
