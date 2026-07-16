@@ -328,14 +328,69 @@ def _resolve_source(doc, src_node, sample_scope):
     return src_node.pixelData, src_node.bounds()
 
 
+def preview_offset(state, cursor_doc_pos):
+    """Doc-space (dx, dy) QPointF from cursor_doc_pos to wherever the source
+    would currently be read from -- None if no source is sampled. Once
+    Aligned mode has a fixed per-stroke offset, uses that (matching what
+    painting will actually do); otherwise (Non-Aligned, or before the first
+    stroke) it's relative to the live cursor, since that's what the next
+    click will set as the offset."""
+    if not state.has_point_source or cursor_doc_pos is None:
+        return None
+    if state.aligned and state.stroke_offset is not None:
+        return state.stroke_offset
+    return QPointF(state.source_point.x() - cursor_doc_pos.x(),
+                    state.source_point.y() - cursor_doc_pos.y())
+
+
 def source_screen_offset(state, cursor_doc_pos, zoom):
     """Returns (dx, dy) screen-pixel offset from cursor to source point,
     or None if no source is sampled."""
-    if not state.has_point_source or cursor_doc_pos is None:
+    off = preview_offset(state, cursor_doc_pos)
+    if off is None:
         return None
-    dx = (state.source_point.x() - cursor_doc_pos.x()) * zoom
-    dy = (state.source_point.y() - cursor_doc_pos.y()) * zoom
-    return (dx, dy)
+    return (off.x() * zoom, off.y() * zoom)
+
+
+def build_alpha_mask(size, hardness, opacity_pct):
+    """Public entry point for the soft round hardness/opacity mask, so the
+    docker can reuse the exact same falloff for the on-cursor content
+    preview instead of duplicating the gradient math."""
+    return _build_soft_circle(size, hardness, opacity_pct)
+
+
+def preview_patch(state, cursor_doc_pos, doc_size):
+    """Returns a doc_size x doc_size QImage of the source content that would
+    currently be cloned at cursor_doc_pos (out-of-bounds areas left
+    transparent), or None if there's no snapshot to read from (no source
+    armed, or the source was too large to snapshot -- see
+    _snapshot_source)."""
+    if state._source_snapshot is None:
+        return None
+    off = preview_offset(state, cursor_doc_pos)
+    if off is None:
+        return None
+
+    half = doc_size / 2.0
+    left = int(cursor_doc_pos.x() + off.x() - half)
+    top = int(cursor_doc_pos.y() + off.y() - half)
+
+    snap_w = state._source_snapshot.width()
+    snap_h = state._source_snapshot.height()
+    local_x = left - state._source_snapshot_left
+    local_y = top - state._source_snapshot_top
+    clip = QRect(local_x, local_y, doc_size, doc_size).intersected(
+        QRect(0, 0, snap_w, snap_h))
+    if clip.isEmpty():
+        return None
+
+    patch = QImage(doc_size, doc_size, QImage.Format_ARGB32_Premultiplied)
+    patch.fill(Qt.transparent)
+    sub = state._source_snapshot.copy(clip)
+    painter = QPainter(patch)
+    painter.drawImage(clip.x() - local_x, clip.y() - local_y, sub)
+    painter.end()
+    return patch
 
 
 def finalize_stroke(doc, state):

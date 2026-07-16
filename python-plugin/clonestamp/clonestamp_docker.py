@@ -4,7 +4,9 @@
 import traceback
 from krita import DockWidget, Krita
 from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt, QUrl
-from PyQt5.QtGui import QColor, QCursor, QDesktopServices, QIcon, QPainter, QPen, QPixmap, QRadialGradient
+from PyQt5.QtGui import (
+    QColor, QCursor, QDesktopServices, QIcon, QImage, QPainter, QPen, QPixmap, QRadialGradient,
+)
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QOpenGLWidget,
     QPushButton, QSpinBox, QVBoxLayout, QWidget,
@@ -426,14 +428,20 @@ class ClonestampDocker(DockWidget):
 
     def _onCrosshairTick(self):
         self._positionCrosshair()
-        # Also update cursor ring when zoom changes during hover.
+        # Also refresh the cursor's content preview from the live hover
+        # position (5Hz -- cheap Qt-only image ops, no Krita API calls, same
+        # budget this project's history has shown to be safe).
         canvas = self._currentCanvas()
-        if canvas:
-            zoom = canvas.zoomLevel()
-            if abs(zoom - self._last_cursor_zoom) > 0.01:
-                self._last_cursor_zoom = zoom
-                self._last_cursor_size = core.STATE.brush_size
-                self._updateBrushCursor()
+        if canvas is None or not core.coordinate_mapping_reliable(canvas):
+            return
+        zoom = canvas.zoomLevel()
+        if abs(zoom - self._last_cursor_zoom) > 0.01:
+            self._last_cursor_zoom = zoom
+            self._last_cursor_size = core.STATE.brush_size
+        local_pos = self._canvas_widget.mapFromGlobal(QCursor.pos())
+        doc_point = core.map_widget_to_document(canvas, self._canvas_widget, QPointF(local_pos))
+        if doc_point is not None:
+            self._updateBrushCursor(doc_point)
 
     def _onResizeTick(self):
         current = QCursor.pos()
@@ -527,6 +535,30 @@ class ClonestampDocker(DockWidget):
         painter.drawEllipse(dl + inset + 1, dt + inset + 1, hardness_diameter, hardness_diameter)
         painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.DashLine))
         painter.drawEllipse(dl + inset, dt + inset, hardness_diameter, hardness_diameter)
+
+        # Live content preview: an actual (ghosted) copy of the source pixels
+        # that would be cloned right now, masked to the same soft-round
+        # shape as the brush. Reads only from the frozen snapshot taken at
+        # sample time (core.STATE._source_snapshot) -- pure Qt image ops, no
+        # Krita API calls here, same as everything else in this function
+        # that has run at this cadence without incident.
+        if show_src:
+            patch = core.preview_patch(core.STATE, cursor_doc_pos, max(1, core.STATE.brush_size))
+            if patch is not None:
+                preview = patch.scaled(diameter, diameter, Qt.IgnoreAspectRatio,
+                                        Qt.SmoothTransformation)
+                preview = preview.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                mask = core.build_alpha_mask(diameter, core.STATE.brush_hardness, 70)
+                mask_painter = QPainter(preview)
+                mask_painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+                mask_painter.drawImage(0, 0, mask)
+                mask_painter.end()
+                sx = int(half + offset[0])
+                sy = int(half + offset[1])
+                painter.drawImage(sx - diameter // 2, sy - diameter // 2, preview)
+                painter.setPen(QPen(QColor(255, 255, 255, 160), 1))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(sx - diameter // 2, sy - diameter // 2, diameter, diameter)
 
         # Red crosshair at source offset (follows cursor, shows what's cloned).
         if show_src:
