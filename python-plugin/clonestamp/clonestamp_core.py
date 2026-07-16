@@ -6,7 +6,7 @@ No Qt-widget code lives here so it can be exercised/reasoned about independently
 of the docker and extension UI.
 """
 
-import os, traceback
+import os
 from PyQt5.QtCore import QRect, QRectF, QByteArray, Qt, QPointF
 from PyQt5.QtGui import QImage, QPainter, QColor, QRadialGradient
 
@@ -31,9 +31,11 @@ GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
 PIXEL_FORMAT = QImage.Format_ARGB32
 BLEND_FORMAT = QImage.Format_ARGB32_Premultiplied
 
-# Skip accumulator for canvases larger than this (pixel count) to avoid
-# excessive memory use -- falls back to per-dab direct writes.
-MAX_ACCUMULATOR_PIXELS = 50_000_000  # ~7000x7000
+# Ceiling on the stroke accumulator (pixel count) to bound worst-case memory
+# use -- a Format_ARGB32_Premultiplied buffer this size is ~4 bytes/px, so
+# this caps it around 800MB. Above this, the stroke is refused outright
+# (see begin_stroke) rather than silently doing nothing.
+MAX_ACCUMULATOR_PIXELS = 200_000_000  # ~14000x14000
 
 
 class ClonestampError(Exception):
@@ -236,6 +238,12 @@ def begin_stroke(state, doc, doc_point):
         state._acc_bounds, state._acc_left, state._acc_top,
         (state._acc_image.width(), state._acc_image.height())
         if state._acc_image else "NONE"))
+    if not ok:
+        raise ClonestampError(
+            "Canvas is {0}x{1} ({2:,} px), too large for Clone Stamp's "
+            "stroke buffer (limit {3:,} px).".format(
+                bounds.width(), bounds.height(),
+                bounds.width() * bounds.height(), MAX_ACCUMULATOR_PIXELS))
 
 
 def continue_stroke(doc, state, doc_point, min_spacing=2.0):
@@ -273,6 +281,16 @@ def _resolve_source(doc, src_node, sample_scope):
         root = doc.rootNode()
         return root.projectionPixelData, root.bounds()
     return src_node.pixelData, src_node.bounds()
+
+
+def source_screen_offset(state, cursor_doc_pos, zoom):
+    """Returns (dx, dy) screen-pixel offset from cursor to source point,
+    or None if no source is sampled."""
+    if not state.has_point_source or cursor_doc_pos is None:
+        return None
+    dx = (state.source_point.x() - cursor_doc_pos.x()) * zoom
+    dy = (state.source_point.y() - cursor_doc_pos.y()) * zoom
+    return (dx, dy)
 
 
 def finalize_stroke(doc, state):
@@ -377,12 +395,16 @@ def finalize_stroke(doc, state):
     painter.drawImage(0, 0, src_image)
     painter.end()
 
-    # Write back.
+    # Write back (wrapped in undo action for Ctrl+Z support).
     result_bytes = _image_bytes(dst_image)
     _debug("finalize_stroke: write %d bytes @ (%d,%d) %dx%d" % (
         len(result_bytes), dst_rect.x(), dst_rect.y(), final_w, final_h))
-    ok = dst_node.setPixelData(result_bytes,
-                                dst_rect.x(), dst_rect.y(), final_w, final_h)
+    doc.beginUndoAction("Clone Stamp Stroke")
+    try:
+        ok = dst_node.setPixelData(result_bytes,
+                                    dst_rect.x(), dst_rect.y(), final_w, final_h)
+    finally:
+        doc.endUndoAction()
     doc.refreshProjection()
     _debug("finalize_stroke: setPixelData ok=%s" % ok)
     state.clear_accumulator()
