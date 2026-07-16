@@ -113,9 +113,18 @@ class ClonestampDocker(DockWidget):
         # Memoizes the last set of inputs _updateBrushCursor rendered from,
         # so a tick where nothing visually changed (the common case while
         # dragging in Aligned mode, where the source offset is fixed for the
-        # whole stroke) can skip rebuilding the QPixmap and calling
-        # setCursor() -- see _updateBrushCursor.
+        # whole stroke) can skip rebuilding the QPixmap -- see
+        # _updateBrushCursor. setCursor() itself is still reissued every
+        # call even on a memo hit (with the cached pixmap): the underlying
+        # native Krita tool is still selected (we only intercept mouse
+        # events, never change the active KisTool) and receives the real
+        # MouseMove events we don't consume, so it can reassert its own
+        # cursor on plain hover movement. Skipping setCursor() entirely
+        # let that win intermittently, making our ring flicker/disappear
+        # while moving over the canvas.
         self._last_cursor_key = None
+        self._last_cursor_pixmap = None
+        self._last_cursor_half = 0
 
         widget = QWidget()
         layout = QVBoxLayout()
@@ -314,6 +323,7 @@ class ClonestampDocker(DockWidget):
         # state would skip setCursor() and leave the default OS cursor
         # showing instead of the brush ring.
         self._last_cursor_key = None
+        self._last_cursor_pixmap = None
         self._timer.stop()
         self._stroke_active = False
         self._resize_active = False
@@ -622,7 +632,13 @@ class ClonestampDocker(DockWidget):
             (int(round(offset[0])), int(round(offset[1])),
              self._preview_cache_generation) if show_src else None,
         )
-        if cursor_key == self._last_cursor_key:
+        if cursor_key == self._last_cursor_key and self._last_cursor_pixmap is not None:
+            # Reissue the unchanged pixmap rather than skipping outright --
+            # see the comment on _last_cursor_key in __init__ for why this
+            # call still has to happen every tick even though the rebuild
+            # below doesn't.
+            self._canvas_widget.setCursor(
+                QCursor(self._last_cursor_pixmap, self._last_cursor_half, self._last_cursor_half))
             return
         self._last_cursor_key = cursor_key
 
@@ -716,6 +732,8 @@ class ClonestampDocker(DockWidget):
                    force=True)
         finally:
             painter.end()
+        self._last_cursor_pixmap = pixmap
+        self._last_cursor_half = half
         self._canvas_widget.setCursor(QCursor(pixmap, half, half))
 
     def _refreshPreviewCache(self, cursor_doc_pos, diameter):
