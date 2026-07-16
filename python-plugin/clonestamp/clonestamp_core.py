@@ -13,7 +13,7 @@ from PyQt5.QtGui import QImage, QPainter, QColor, QRadialGradient
 _DEBUG_LOG = os.environ.get("TEMP", "") + "\\clonestamp_debug.txt"
 
 # Diagnostic logging is off by default: _debug() writes to a real file on disk,
-# and doing that on every 30ms stroke tick makes drags visibly laggy. To turn
+# and doing that on every stroke tick makes drags visibly laggy. To turn
 # it on, create an empty file named "clonestamp_debug.enable" next to the log
 # (i.e. in your TEMP folder) and restart Krita; delete it and restart to turn
 # it back off. Checked once at plugin load, not per call.
@@ -90,6 +90,13 @@ class ClonestampState:
         self._acc_left = 0
         self._acc_top = 0
         self._acc_bounds = None
+
+        # Cache of the last soft-circle dab brush built by _build_soft_circle,
+        # keyed on the (size, hardness, opacity_pct) that produced it. Those
+        # rarely change mid-stroke, so this avoids rebuilding a fresh
+        # QImage/QRadialGradient on every dab.
+        self._dab_brush_key = None
+        self._dab_brush_image = None
 
     @property
     def has_point_source(self):
@@ -219,6 +226,14 @@ def _build_soft_circle(size, hardness, opacity_pct):
     return img
 
 
+def _cached_dab_brush(state, size, hardness, opacity_pct):
+    key = (size, hardness, opacity_pct)
+    if state._dab_brush_key != key:
+        state._dab_brush_key = key
+        state._dab_brush_image = _build_soft_circle(size, hardness, opacity_pct)
+    return state._dab_brush_image
+
+
 def _paint_dab_to_accumulator(state, dst_center, size, hardness, opacity_pct):
     if state._acc_image is None:
         return False
@@ -248,7 +263,7 @@ def _paint_dab_to_accumulator(state, dst_center, size, hardness, opacity_pct):
     if clip.isEmpty():
         return True
 
-    circle = _build_soft_circle(size, hardness, opacity_pct)
+    circle = _cached_dab_brush(state, size, hardness, opacity_pct)
     src_clip = QRect(clip.x() - local_x, clip.y() - local_y,
                      clip.width(), clip.height())
 

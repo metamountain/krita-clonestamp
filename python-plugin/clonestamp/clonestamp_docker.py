@@ -74,7 +74,10 @@ class ClonestampDocker(DockWidget):
         self._resize_start_global = None
         self._resize_start_size = None
         self._timer = QTimer(self)
-        self._timer.setInterval(30)
+        # PreciseTimer: the default coarse timer type has ~15ms granularity
+        # on Windows, which would silently defeat a 16ms interval.
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.setInterval(16)
         self._timer.timeout.connect(self._onTimerTick)
         self._ch_timer = QTimer(self)
         self._ch_timer.setInterval(200)
@@ -82,11 +85,17 @@ class ClonestampDocker(DockWidget):
         self._last_cursor_zoom = -1.0
         self._last_cursor_size = -1
         self._tick_counter = 0
+        # First/last _onTimerTick timestamps for the active stroke, used to
+        # log a single actual-cadence summary on release (see
+        # _onCanvasRelease) -- lets the interval/PreciseTimer setting above
+        # be empirically checked instead of just assumed.
+        self._tick_first_t = 0.0
+        self._tick_last_t = 0.0
         self._crosshair = SourceCrosshair()
 
         # Cache for the live content-preview patch (see _updateBrushCursor).
-        # Rebuilding it (image scale + soft-mask paint) on every 30ms drag
-        # tick was the likely cause of drag lag -- this project's own history
+        # Rebuilding it (image scale + soft-mask paint) on every drag tick
+        # was the likely cause of drag lag -- this project's own history
         # only validated that cost at the 200ms/5Hz hover cadence. The cache
         # lets ring/crosshair redraw stay at full tick rate while the
         # expensive preview content itself refreshes at that same
@@ -95,6 +104,18 @@ class ClonestampDocker(DockWidget):
         self._preview_cache_time = 0.0
         self._preview_cache_diameter = -1
         self._preview_cache_hardness = -1.0
+        # Bumped each time _refreshPreviewCache actually recomputes, so
+        # _updateBrushCursor's rebuild memo (see _last_cursor_key) can tell
+        # "the cached preview content changed" apart from "still the same
+        # frame as last tick".
+        self._preview_cache_generation = 0
+
+        # Memoizes the last set of inputs _updateBrushCursor rendered from,
+        # so a tick where nothing visually changed (the common case while
+        # dragging in Aligned mode, where the source offset is fixed for the
+        # whole stroke) can skip rebuilding the QPixmap and calling
+        # setCursor() -- see _updateBrushCursor.
+        self._last_cursor_key = None
 
         widget = QWidget()
         layout = QVBoxLayout()
@@ -288,6 +309,11 @@ class ClonestampDocker(DockWidget):
             QApplication.instance().removeEventFilter(self)
             self._canvas_widget.unsetCursor()
             self._toggleNativeBrushOutline()
+        # unsetCursor() above bypasses the _updateBrushCursor rebuild memo,
+        # so without this a rearm whose key happens to match the pre-disarm
+        # state would skip setCursor() and leave the default OS cursor
+        # showing instead of the brush ring.
+        self._last_cursor_key = None
         self._timer.stop()
         self._stroke_active = False
         self._resize_active = False
@@ -399,6 +425,15 @@ class ClonestampDocker(DockWidget):
         if event.button() != Qt.LeftButton:
             return False
         if self._stroke_active:
+            # One-line actual-tick-rate summary per stroke (force=True: this
+            # is the empirical check for whether setInterval(16) +
+            # PreciseTimer is actually being honored on this machine, so it
+            # logs even with the debug gate off).
+            if self._tick_counter > 1:
+                span_ms = (self._tick_last_t - self._tick_first_t) * 1000.0
+                avg_ms = span_ms / (self._tick_counter - 1)
+                _debug("stroke ticks: n=%d avg_dt=%.1fms span=%.0fms"
+                       % (self._tick_counter, avg_ms, span_ms), force=True)
             doc = Krita.instance().activeDocument()
             if doc is not None:
                 result = core.finalize_stroke(doc, core.STATE)
@@ -439,6 +474,10 @@ class ClonestampDocker(DockWidget):
             return
 
         self._tick_counter += 1
+        now = time.perf_counter()
+        if self._tick_counter == 1:
+            self._tick_first_t = now
+        self._tick_last_t = now
         local_pos = self._canvas_widget.mapFromGlobal(QCursor.pos())
         canvas = self._currentCanvas()
         if canvas is None or not core.coordinate_mapping_reliable(canvas):
@@ -550,6 +589,34 @@ class ClonestampDocker(DockWidget):
         offset = core.source_screen_offset(core.STATE, cursor_doc_pos, zoom)
         show_src = offset is not None
 
+        # Refresh (or reuse) the preview-content cache before computing the
+        # memo key below, so a due refresh always bumps
+        # _preview_cache_generation *before* it's read -- otherwise a stale
+        # generation value would get baked into the key and the cache would
+        # never be seen as due again.
+        if show_src:
+            self._refreshPreviewCache(cursor_doc_pos, diameter)
+
+        # Skip the rebuild when nothing that determines the rendered pixels
+        # has changed since the last call. setCursor() only sets the cursor
+        # *shape* -- the windowing system repositions that shape at the live
+        # pointer location on its own every frame, so skipping an unchanged
+        # rebuild cannot make the ring visually lag. In Aligned mode the
+        # source offset is fixed for the whole stroke, so this collapses the
+        # per-tick cost from every ~16ms tick down to whenever the preview
+        # cache actually refreshes (~5Hz) or size/hardness/zoom change; in
+        # Non-Aligned mode the offset itself tracks the live cursor, so this
+        # self-adjusts back to rebuilding every tick.
+        cursor_key = (
+            diameter,
+            core.STATE.brush_hardness,
+            (int(round(offset[0])), int(round(offset[1])),
+             self._preview_cache_generation) if show_src else None,
+        )
+        if cursor_key == self._last_cursor_key:
+            return
+        self._last_cursor_key = cursor_key
+
         half_ring = diameter // 2 + 2
         if show_src:
             ox, oy = offset
@@ -583,15 +650,13 @@ class ClonestampDocker(DockWidget):
             #
             # The scale+mask work below is only recomputed at ~5Hz (see
             # _preview_cache_*), not on every call to this function -- this
-            # function runs every 30ms during a drag (33Hz) to keep the
-            # cheap ring/crosshair responsive, but this project's own
-            # history only validated this image-scaling cost at the 200ms
-            # hover cadence; doing it at 33Hz was the likely cause of drag
-            # lag. The cached frame is reused between recomputes.
-            if show_src:
-                self._refreshPreviewCache(cursor_doc_pos, diameter)
-                if self._preview_cache_image is not None:
-                    painter.drawImage(dl, dt, self._preview_cache_image)
+            # function runs on every drag tick to keep the cheap
+            # ring/crosshair responsive, but this project's own history only
+            # validated this image-scaling cost at the 200ms hover cadence;
+            # doing it at full tick rate was the likely cause of drag lag.
+            # The cached frame is reused between recomputes.
+            if show_src and self._preview_cache_image is not None:
+                painter.drawImage(dl, dt, self._preview_cache_image)
 
             if core.STATE.brush_hardness < 1.0:
                 dcenter = half + 0.5
@@ -662,6 +727,7 @@ class ClonestampDocker(DockWidget):
         self._preview_cache_time = now
         self._preview_cache_diameter = diameter
         self._preview_cache_hardness = core.STATE.brush_hardness
+        self._preview_cache_generation += 1
         patch = core.preview_patch(core.STATE, cursor_doc_pos, max(1, core.STATE.brush_size))
         if patch is None:
             self._preview_cache_image = None
