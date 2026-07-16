@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: CC0-1.0
 # SPDX-FileCopyrightText: 2026 metamountain <mail@metamountain.net>
 
+import time
 import traceback
 from krita import DockWidget, Krita
 from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt, QUrl
@@ -9,7 +10,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QOpenGLWidget,
-    QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from . import clonestamp_core as core
@@ -83,6 +84,18 @@ class ClonestampDocker(DockWidget):
         self._tick_counter = 0
         self._crosshair = SourceCrosshair()
 
+        # Cache for the live content-preview patch (see _updateBrushCursor).
+        # Rebuilding it (image scale + soft-mask paint) on every 30ms drag
+        # tick was the likely cause of drag lag -- this project's own history
+        # only validated that cost at the 200ms/5Hz hover cadence. The cache
+        # lets ring/crosshair redraw stay at full tick rate while the
+        # expensive preview content itself refreshes at that same
+        # already-proven-safe ~5Hz, reusing the last frame in between.
+        self._preview_cache_image = None
+        self._preview_cache_time = 0.0
+        self._preview_cache_diameter = -1
+        self._preview_cache_hardness = -1.0
+
         widget = QWidget()
         layout = QVBoxLayout()
 
@@ -113,6 +126,11 @@ class ClonestampDocker(DockWidget):
 
         hardnessRow = QHBoxLayout()
         hardnessRow.addWidget(QLabel("Hardness:"))
+        self.hardnessSlider = QSlider(Qt.Horizontal)
+        self.hardnessSlider.setRange(0, 100)
+        self.hardnessSlider.setValue(int(core.STATE.brush_hardness * 100))
+        self.hardnessSlider.valueChanged.connect(self._onHardnessChanged)
+        hardnessRow.addWidget(self.hardnessSlider)
         self.hardnessSpin = QSpinBox()
         self.hardnessSpin.setRange(0, 100)
         self.hardnessSpin.setValue(int(core.STATE.brush_hardness * 100))
@@ -186,6 +204,13 @@ class ClonestampDocker(DockWidget):
 
     def _onHardnessChanged(self, value):
         core.STATE.brush_hardness = value / 100.0
+        self.hardnessSlider.blockSignals(True)
+        self.hardnessSlider.setValue(value)
+        self.hardnessSlider.blockSignals(False)
+        self.hardnessSpin.blockSignals(True)
+        self.hardnessSpin.setValue(value)
+        self.hardnessSpin.blockSignals(False)
+        self._updateBrushCursor()
 
     def _onBrushOpacityChanged(self, value):
         core.STATE.brush_opacity = value
@@ -245,6 +270,7 @@ class ClonestampDocker(DockWidget):
             return
         self._canvas_widget = widget
         QApplication.instance().installEventFilter(self)
+        self._toggleNativeBrushOutline()
         self._updateBrushCursor()
         canvas = self._currentCanvas()
         if canvas:
@@ -261,11 +287,28 @@ class ClonestampDocker(DockWidget):
         if self._canvas_widget is not None:
             QApplication.instance().removeEventFilter(self)
             self._canvas_widget.unsetCursor()
+            self._toggleNativeBrushOutline()
         self._timer.stop()
         self._stroke_active = False
         self._resize_active = False
         self._canvas_widget = None
         self.brushStatusLabel.setText("")
+
+    def _toggleNativeBrushOutline(self):
+        """Flips Krita's own brush-outline circle (the round cursor overlay
+        the underlying native tool -- e.g. Freehand Brush -- still draws,
+        since we only intercept mouse events and never actually change the
+        active KisTool). It's a canvas-level paint overlay, not a QCursor,
+        so our own setCursor()/unsetCursor() calls have no effect on it and
+        it would otherwise show doubled up with our own ring. Krita exposes
+        exactly this as the "toggle_brush_outline" action (bound to a
+        keyboard shortcut for users to peek under their brush while
+        painting) -- it flips between OUTLINE_NONE and whatever style was
+        last in use, so calling it once on arm and once on disarm hides it
+        while Clone Brush is enabled and symmetrically restores it after."""
+        action = Krita.instance().action("toggle_brush_outline")
+        if action is not None:
+            action.trigger()
 
     # --- event filter: only press/release are used; drag is timer-driven --
 
@@ -320,6 +363,8 @@ class ClonestampDocker(DockWidget):
             self._resize_start_global = QCursor.pos()
             self._resize_start_size = core.STATE.brush_size
             self._resize_start_hardness_pct = int(round(core.STATE.brush_hardness * 100))
+            self._resize_accum_dx = 0
+            self._resize_accum_dy = 0
             self._timer.start()
             return True
 
@@ -444,11 +489,22 @@ class ClonestampDocker(DockWidget):
             self._updateBrushCursor(doc_point)
 
     def _onResizeTick(self):
+        # The OS cursor is warped back to the drag's start position every
+        # tick (below) so it stays visually anchored in place instead of
+        # travelling across the screen while resizing -- Photoshop-style
+        # "scratch pad" feedback where only the brush ring changes, not the
+        # pointer position. Movement is therefore accumulated across ticks
+        # (each tick's delta is measured from the anchor we just warped
+        # back to) rather than read as one absolute offset from the start.
         current = QCursor.pos()
         dx = current.x() - self._resize_start_global.x()
         dy = current.y() - self._resize_start_global.y()
+        self._resize_accum_dx += dx
+        self._resize_accum_dy += dy
+        if dx or dy:
+            QCursor.setPos(self._resize_start_global)
 
-        new_size = max(1, int(self._resize_start_size + dx))
+        new_size = max(1, int(self._resize_start_size + self._resize_accum_dx))
         size_changed = new_size != core.STATE.brush_size
         if size_changed:
             core.STATE.brush_size = new_size
@@ -456,11 +512,14 @@ class ClonestampDocker(DockWidget):
             self.sizeSpin.setValue(new_size)
             self.sizeSpin.blockSignals(False)
 
-        new_hardness_pct = max(0, min(100, self._resize_start_hardness_pct - dy))
+        new_hardness_pct = max(0, min(100, self._resize_start_hardness_pct - self._resize_accum_dy))
         new_hardness = new_hardness_pct / 100.0
         hardness_changed = new_hardness != core.STATE.brush_hardness
         if hardness_changed:
             core.STATE.brush_hardness = new_hardness
+            self.hardnessSlider.blockSignals(True)
+            self.hardnessSlider.setValue(new_hardness_pct)
+            self.hardnessSlider.blockSignals(False)
             self.hardnessSpin.blockSignals(True)
             self.hardnessSpin.setValue(new_hardness_pct)
             self.hardnessSpin.blockSignals(False)
@@ -505,77 +564,117 @@ class ClonestampDocker(DockWidget):
         pixmap = QPixmap(pixmap_size, pixmap_size)
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setBrush(Qt.NoBrush)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setBrush(Qt.NoBrush)
 
-        # Destination ring (at pixmap center).
-        dl = half - diameter // 2
-        dt = half - diameter // 2
+            # Destination ring (at pixmap center).
+            dl = half - diameter // 2
+            dt = half - diameter // 2
 
-        if core.STATE.brush_hardness < 1.0:
-            dcenter = half + 0.5
-            grad = QRadialGradient(dcenter, dcenter, half - 1)
-            grad.setColorAt(0.0, QColor(255, 255, 255, 12))
-            grad.setColorAt(float(core.STATE.brush_hardness),
-                            QColor(255, 255, 255, 12))
-            grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-            painter.setBrush(grad)
-            painter.setPen(Qt.NoPen)
+            # Live content preview: an actual (ghosted) copy of the source
+            # pixels that would be cloned right now, masked to the same
+            # soft-round shape as the brush. Drawn at the destination
+            # (dl, dt) -- i.e. under the brush ring, where painting will
+            # actually land -- not at the source point, which is separately
+            # marked by the crosshair below. Drawn first so the
+            # ring/dashed-hardness outlines below paint on top of it and
+            # stay crisp.
+            #
+            # The scale+mask work below is only recomputed at ~5Hz (see
+            # _preview_cache_*), not on every call to this function -- this
+            # function runs every 30ms during a drag (33Hz) to keep the
+            # cheap ring/crosshair responsive, but this project's own
+            # history only validated this image-scaling cost at the 200ms
+            # hover cadence; doing it at 33Hz was the likely cause of drag
+            # lag. The cached frame is reused between recomputes.
+            if show_src:
+                self._refreshPreviewCache(cursor_doc_pos, diameter)
+                if self._preview_cache_image is not None:
+                    painter.drawImage(dl, dt, self._preview_cache_image)
+
+            if core.STATE.brush_hardness < 1.0:
+                dcenter = half + 0.5
+                grad = QRadialGradient(dcenter, dcenter, half - 1)
+                grad.setColorAt(0.0, QColor(255, 255, 255, 12))
+                grad.setColorAt(float(core.STATE.brush_hardness),
+                                QColor(255, 255, 255, 12))
+                grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+                painter.setBrush(grad)
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(dl, dt, diameter, diameter)
+
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
+            painter.drawEllipse(dl + 1, dt + 1, diameter, diameter)
+            painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
             painter.drawEllipse(dl, dt, diameter, diameter)
 
-        painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
-        painter.drawEllipse(dl + 1, dt + 1, diameter, diameter)
-        painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
-        painter.drawEllipse(dl, dt, diameter, diameter)
+            hardness_diameter = max(3, int(diameter * core.STATE.brush_hardness))
+            inset = (diameter - hardness_diameter) // 2
+            painter.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt.DashLine))
+            painter.drawEllipse(dl + inset + 1, dt + inset + 1, hardness_diameter, hardness_diameter)
+            painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.DashLine))
+            painter.drawEllipse(dl + inset, dt + inset, hardness_diameter, hardness_diameter)
 
-        hardness_diameter = max(3, int(diameter * core.STATE.brush_hardness))
-        inset = (diameter - hardness_diameter) // 2
-        painter.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt.DashLine))
-        painter.drawEllipse(dl + inset + 1, dt + inset + 1, hardness_diameter, hardness_diameter)
-        painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.DashLine))
-        painter.drawEllipse(dl + inset, dt + inset, hardness_diameter, hardness_diameter)
-
-        # Live content preview: an actual (ghosted) copy of the source pixels
-        # that would be cloned right now, masked to the same soft-round
-        # shape as the brush. Reads only from the frozen snapshot taken at
-        # sample time (core.STATE._source_snapshot) -- pure Qt image ops, no
-        # Krita API calls here, same as everything else in this function
-        # that has run at this cadence without incident.
-        if show_src:
-            patch = core.preview_patch(core.STATE, cursor_doc_pos, max(1, core.STATE.brush_size))
-            if patch is not None:
-                preview = patch.scaled(diameter, diameter, Qt.IgnoreAspectRatio,
-                                        Qt.SmoothTransformation)
-                preview = preview.convertToFormat(QImage.Format_ARGB32_Premultiplied)
-                mask = core.build_alpha_mask(diameter, core.STATE.brush_hardness, 70)
-                mask_painter = QPainter(preview)
-                mask_painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-                mask_painter.drawImage(0, 0, mask)
-                mask_painter.end()
+            # Red crosshair at source offset (follows cursor, shows what's cloned).
+            if show_src:
                 sx = int(half + offset[0])
                 sy = int(half + offset[1])
-                painter.drawImage(sx - diameter // 2, sy - diameter // 2, preview)
-                painter.setPen(QPen(QColor(255, 255, 255, 160), 1))
-                painter.setBrush(Qt.NoBrush)
-                painter.drawEllipse(sx - diameter // 2, sy - diameter // 2, diameter, diameter)
-
-        # Red crosshair at source offset (follows cursor, shows what's cloned).
-        if show_src:
-            sx = int(half + offset[0])
-            sy = int(half + offset[1])
-            cs = 6
-            painter.setPen(QPen(QColor(255, 0, 0, 220), 2))
-            painter.drawLine(sx - cs, sy, sx + cs, sy)
-            painter.drawLine(sx, sy - cs, sx, sy + cs)
-            painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
-            painter.drawLine(sx - cs, sy - 1, sx + cs, sy - 1)
-            painter.drawLine(sx - cs, sy + 1, sx + cs, sy + 1)
-            painter.drawLine(sx - 1, sy - cs, sx - 1, sy + cs)
-            painter.drawLine(sx + 1, sy - cs, sx + 1, sy + cs)
-
-        painter.end()
+                cs = 6
+                painter.setPen(QPen(QColor(255, 0, 0, 220), 2))
+                painter.drawLine(sx - cs, sy, sx + cs, sy)
+                painter.drawLine(sx, sy - cs, sx, sy + cs)
+                painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
+                painter.drawLine(sx - cs, sy - 1, sx + cs, sy - 1)
+                painter.drawLine(sx - cs, sy + 1, sx + cs, sy + 1)
+                painter.drawLine(sx - 1, sy - cs, sx - 1, sy + cs)
+                painter.drawLine(sx + 1, sy - cs, sx + 1, sy + cs)
+        except Exception as e:
+            # A mid-paint exception here (e.g. from the preview patch/mask
+            # work) would otherwise leave the painter still active on
+            # `pixmap` when we hand it to QCursor below -- Qt does not allow
+            # a QPixmap to be used elsewhere while a QPainter is still open
+            # on it, which is a real crash risk, not just a cosmetic one.
+            # Falling back to the plain ring (no preview) for this one frame
+            # keeps the brush cursor usable instead of losing it or crashing.
+            _debug("_updateBrushCursor error: %s\n%s" % (e, traceback.format_exc()),
+                   force=True)
+        finally:
+            painter.end()
         self._canvas_widget.setCursor(QCursor(pixmap, half, half))
+
+    def _refreshPreviewCache(self, cursor_doc_pos, diameter):
+        """Recomputes self._preview_cache_image (the scaled+masked ghost of
+        the source content) at most ~5Hz -- see the cache fields set in
+        __init__ for why. Cheap no-op if called again before that interval
+        elapses or brush size/hardness haven't changed; the previous frame
+        is simply reused by the caller."""
+        now = time.monotonic()
+        stale = (
+            self._preview_cache_image is None
+            or (now - self._preview_cache_time) >= 0.2
+            or self._preview_cache_diameter != diameter
+            or self._preview_cache_hardness != core.STATE.brush_hardness
+        )
+        if not stale:
+            return
+        self._preview_cache_time = now
+        self._preview_cache_diameter = diameter
+        self._preview_cache_hardness = core.STATE.brush_hardness
+        patch = core.preview_patch(core.STATE, cursor_doc_pos, max(1, core.STATE.brush_size))
+        if patch is None:
+            self._preview_cache_image = None
+            return
+        preview = patch.scaled(diameter, diameter, Qt.IgnoreAspectRatio,
+                                Qt.SmoothTransformation)
+        preview = preview.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+        mask = core.build_alpha_mask(diameter, core.STATE.brush_hardness, 70)
+        mask_painter = QPainter(preview)
+        mask_painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        mask_painter.drawImage(0, 0, mask)
+        mask_painter.end()
+        self._preview_cache_image = preview
 
     def _warn(self, message):
         window = Krita.instance().activeWindow()

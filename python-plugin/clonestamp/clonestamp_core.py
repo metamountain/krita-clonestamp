@@ -67,7 +67,7 @@ class ClonestampState:
         self.aligned = True
         self.stroke_offset = None
         self.last_dab_point = None
-        self.brush_size = 50
+        self.brush_size = 250
         self.brush_hardness = 0.5
         self.brush_opacity = 100
         self.sample_scope = "current"
