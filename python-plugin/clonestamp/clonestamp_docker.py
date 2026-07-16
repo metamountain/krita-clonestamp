@@ -593,9 +593,18 @@ class ClonestampDocker(DockWidget):
         # memo key below, so a due refresh always bumps
         # _preview_cache_generation *before* it's read -- otherwise a stale
         # generation value would get baked into the key and the cache would
-        # never be seen as due again.
+        # never be seen as due again. This runs before the pixmap/painter
+        # below exist, so it needs its own try/except: an exception here
+        # would otherwise propagate straight out of the QTimer slot with no
+        # safety net (the try/finally below only guards the paint routine
+        # itself), reintroducing the crash risk that guard exists for.
         if show_src:
-            self._refreshPreviewCache(cursor_doc_pos, diameter)
+            try:
+                self._refreshPreviewCache(cursor_doc_pos, diameter)
+            except Exception as e:
+                _debug("_refreshPreviewCache error: %s\n%s" % (e, traceback.format_exc()),
+                       force=True)
+                self._preview_cache_image = None
 
         # Skip the rebuild when nothing that determines the rendered pixels
         # has changed since the last call. setCursor() only sets the cursor
