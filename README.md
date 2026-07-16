@@ -54,6 +54,12 @@ is the source the release zip is built from, structured to match exactly
 what Krita's own plugin importer expects — a folder named after the
 plugin, containing `__init__.py` and the `.desktop` file.)
 
+**Debug logging** (off by default — it writes to disk on every stroke tick
+and makes drags laggy): create an empty file named `clonestamp_debug.enable`
+in your TEMP folder (paste `%TEMP%` into the Explorer address bar to get
+there) and restart Krita. The plugin then logs to `clonestamp_debug.txt` in
+that same folder. Delete the `.enable` file and restart to turn it off.
+
 ## Why two implementations?
 
 Krita's Python scripting API (`libkis`) has no way to register a new entry

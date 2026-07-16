@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: CC0-1.0
 # SPDX-FileCopyrightText: 2026 metamountain <mail@metamountain.net>
 
-import os, traceback
+import traceback
 from krita import DockWidget, Krita
 from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt, QUrl
 from PyQt5.QtGui import QColor, QCursor, QDesktopServices, QIcon, QPainter, QPen, QPixmap, QRadialGradient
@@ -12,15 +12,9 @@ from PyQt5.QtWidgets import (
 
 from . import clonestamp_core as core
 
-_DEBUG_LOG = core._DEBUG_LOG
-
-
-def _debug(msg):
-    try:
-        with open(_DEBUG_LOG, "a") as f:
-            f.write(msg + "\n")
-    except Exception:
-        pass
+# Single shared debug writer lives in core (gated off by default there --
+# see core._DEBUG_ENABLED for how to switch it on).
+_debug = core._debug
 
 
 def _find_canvas_widget():
@@ -284,12 +278,10 @@ class ClonestampDocker(DockWidget):
             elif et == QEvent.MouseButtonRelease:
                 return self._onCanvasRelease(event)
         except Exception as e:
-            msg = "eventFilter error: %s\n%s" % (e, traceback.format_exc())
-            try:
-                with open(os.environ.get("TEMP", "") + "\\clonestamp_debug.txt", "a") as f:
-                    f.write(msg + "\n")
-            except Exception:
-                pass
+            # Exceptions are rare and always worth a trace, even with the
+            # debug gate off -- hence force=True.
+            _debug("eventFilter error: %s\n%s" % (e, traceback.format_exc()),
+                   force=True)
             self.brushStatusLabel.setText(str(e)[:80])
         return False
 
@@ -419,15 +411,16 @@ class ClonestampDocker(DockWidget):
             self._stroke_active = False
             return
 
-        # Cursor refresh (every 5th tick for crosshair + source ring).
+        # Cursor refresh -- every tick while a source is armed, so the red
+        # source-offset crosshair tracks the actual cursor during a drag
+        # instead of visibly lagging behind it.
         zoom_changed = abs(zoom - self._last_cursor_zoom) > 0.01
         size_changed = core.STATE.brush_size != self._last_cursor_size
         if zoom_changed or size_changed:
             self._last_cursor_zoom = zoom
             self._last_cursor_size = core.STATE.brush_size
         if core.STATE.has_point_source:
-            if zoom_changed or size_changed or (self._tick_counter % 5 == 0):
-                self._updateBrushCursor(doc_point)
+            self._updateBrushCursor(doc_point)
         elif zoom_changed or size_changed:
             self._updateBrushCursor()
 

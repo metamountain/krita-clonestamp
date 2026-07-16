@@ -12,8 +12,18 @@ from PyQt5.QtGui import QImage, QPainter, QColor, QRadialGradient
 
 _DEBUG_LOG = os.environ.get("TEMP", "") + "\\clonestamp_debug.txt"
 
+# Diagnostic logging is off by default: _debug() writes to a real file on disk,
+# and doing that on every 30ms stroke tick makes drags visibly laggy. To turn
+# it on, create an empty file named "clonestamp_debug.enable" next to the log
+# (i.e. in your TEMP folder) and restart Krita; delete it and restart to turn
+# it back off. Checked once at plugin load, not per call.
+_DEBUG_ENABLED = os.path.exists(
+    os.environ.get("TEMP", "") + "\\clonestamp_debug.enable")
 
-def _debug(msg):
+
+def _debug(msg, force=False):
+    if not (force or _DEBUG_ENABLED):
+        return
     try:
         with open(_DEBUG_LOG, "a") as f:
             f.write(msg + "\n")
@@ -395,16 +405,12 @@ def finalize_stroke(doc, state):
     painter.drawImage(0, 0, src_image)
     painter.end()
 
-    # Write back (wrapped in undo action for Ctrl+Z support).
+    # Write back.
     result_bytes = _image_bytes(dst_image)
     _debug("finalize_stroke: write %d bytes @ (%d,%d) %dx%d" % (
         len(result_bytes), dst_rect.x(), dst_rect.y(), final_w, final_h))
-    doc.beginUndoAction("Clone Stamp Stroke")
-    try:
-        ok = dst_node.setPixelData(result_bytes,
-                                    dst_rect.x(), dst_rect.y(), final_w, final_h)
-    finally:
-        doc.endUndoAction()
+    ok = dst_node.setPixelData(result_bytes,
+                                dst_rect.x(), dst_rect.y(), final_w, final_h)
     doc.refreshProjection()
     _debug("finalize_stroke: setPixelData ok=%s" % ok)
     state.clear_accumulator()
