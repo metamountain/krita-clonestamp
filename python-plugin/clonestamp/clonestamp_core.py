@@ -47,6 +47,12 @@ BLEND_FORMAT = QImage.Format_ARGB32_Premultiplied
 # (see begin_stroke) rather than silently doing nothing.
 MAX_ACCUMULATOR_PIXELS = 200_000_000  # ~14000x14000
 
+# Same cap applied to the source snapshot taken at sample time (see
+# sample_source_point) -- above this, finalize_stroke falls back to reading
+# the source live, which re-opens the smear-when-overlapping issue but at
+# least keeps working on very large documents.
+MAX_SOURCE_SNAPSHOT_PIXELS = MAX_ACCUMULATOR_PIXELS
+
 
 class ClonestampError(Exception):
     """Raised for any expected/user-facing failure; callers show it and stop."""
@@ -65,6 +71,16 @@ class ClonestampState:
         self.brush_hardness = 0.5
         self.brush_opacity = 100
         self.sample_scope = "current"
+
+        # Frozen copy of the source pixels, taken once when the source point
+        # is sampled (see sample_source_point) -- read from this instead of
+        # the live layer so that painting over pixels the source point has
+        # already passed over doesn't clone already-modified content back
+        # onto itself (real Photoshop's Clone Stamp always samples the
+        # original, un-painted-over pixels, not a live/current read).
+        self._source_snapshot = None
+        self._source_snapshot_left = 0
+        self._source_snapshot_top = 0
 
         # In-memory alpha-accumulator for the current stroke.
         # Painted dabs record a soft white circle here instead of hitting
@@ -141,7 +157,26 @@ def sample_source_point(doc, state, doc_point):
     state.source_point = QPointF(doc_point)
     state.stroke_offset = None
     state.last_dab_point = None
+    _snapshot_source(doc, state, node)
     return node, state.source_point
+
+
+def _snapshot_source(doc, state, node):
+    """Freezes a copy of the source pixels at the moment they're sampled --
+    see ClonestampState._source_snapshot for why. Falls back to a live read
+    (state._source_snapshot left as None) if the source is too big to
+    reasonably hold a whole extra copy of in memory."""
+    read_fn, bounds = _resolve_source(doc, node, state.sample_scope)
+    w, h = bounds.width(), bounds.height()
+    if w <= 0 or h <= 0 or w * h > MAX_SOURCE_SNAPSHOT_PIXELS:
+        _debug("_snapshot_source: source %dx%d too large or empty, "
+               "falling back to live read" % (w, h))
+        state._source_snapshot = None
+        return
+    snap_bytes = read_fn(bounds.x(), bounds.y(), w, h)
+    state._source_snapshot = QImage(snap_bytes, w, h, PIXEL_FORMAT).copy()
+    state._source_snapshot_left = bounds.x()
+    state._source_snapshot_top = bounds.y()
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +381,11 @@ def finalize_stroke(doc, state):
                      mask_rect.width(), mask_rect.height())
 
     src_clip = src_full.intersected(src_bounds)
-    dst_clip = dst_full.intersected(dst_node.bounds())
+    # Clip against the canvas, not dst_node.bounds() -- for a paint layer that
+    # returns the tight bounding box of its current non-transparent content,
+    # which is empty on a fresh/blank layer, so every stroke would abort here
+    # before ever painting a single pixel.
+    dst_clip = dst_full.intersected(doc_bounds)
 
     if src_clip.isEmpty() or dst_clip.isEmpty():
         _debug("finalize_stroke: src_clip=%s dst_clip=%s EMPTY -- abort" % (src_clip, dst_clip))
@@ -378,9 +417,18 @@ def finalize_stroke(doc, state):
     mask_sx = dst_rect.x() - state._acc_left
     mask_sy = dst_rect.y() - state._acc_top
 
-    # Read source.
-    src_bytes = read_fn(src_rect.x(), src_rect.y(), final_w, final_h)
-    src_image = QImage(src_bytes, final_w, final_h, PIXEL_FORMAT)
+    # Read source -- from the frozen snapshot taken at sample time when
+    # available, so that once the source path crosses ground already painted
+    # in this session, it clones the original pixels there, not the
+    # already-modified ones. Falls back to a live read if the source was too
+    # large to snapshot.
+    if state._source_snapshot is not None:
+        snap_x = src_rect.x() - state._source_snapshot_left
+        snap_y = src_rect.y() - state._source_snapshot_top
+        src_image = state._source_snapshot.copy(snap_x, snap_y, final_w, final_h)
+    else:
+        src_bytes = read_fn(src_rect.x(), src_rect.y(), final_w, final_h)
+        src_image = QImage(src_bytes, final_w, final_h, PIXEL_FORMAT)
     src_image = src_image.convertToFormat(BLEND_FORMAT)
 
     # Read destination.
