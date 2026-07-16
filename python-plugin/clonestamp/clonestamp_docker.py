@@ -126,6 +126,10 @@ class ClonestampDocker(DockWidget):
         self._last_cursor_pixmap = None
         self._last_cursor_half = 0
 
+        # Krita's own "newOutlineStyle" setting value saved across an
+        # arm/disarm cycle -- see _setNativeBrushOutlineHidden.
+        self._native_outline_saved = None
+
         widget = QWidget()
         layout = QVBoxLayout()
 
@@ -300,7 +304,7 @@ class ClonestampDocker(DockWidget):
             return
         self._canvas_widget = widget
         QApplication.instance().installEventFilter(self)
-        self._toggleNativeBrushOutline()
+        self._setNativeBrushOutlineHidden(True)
         self._updateBrushCursor()
         canvas = self._currentCanvas()
         if canvas:
@@ -317,7 +321,7 @@ class ClonestampDocker(DockWidget):
         if self._canvas_widget is not None:
             QApplication.instance().removeEventFilter(self)
             self._canvas_widget.unsetCursor()
-            self._toggleNativeBrushOutline()
+            self._setNativeBrushOutlineHidden(False)
         # unsetCursor() above bypasses the _updateBrushCursor rebuild memo,
         # so without this a rearm whose key happens to match the pre-disarm
         # state would skip setCursor() and leave the default OS cursor
@@ -330,21 +334,38 @@ class ClonestampDocker(DockWidget):
         self._canvas_widget = None
         self.brushStatusLabel.setText("")
 
-    def _toggleNativeBrushOutline(self):
-        """Flips Krita's own brush-outline circle (the round cursor overlay
-        the underlying native tool -- e.g. Freehand Brush -- still draws,
-        since we only intercept mouse events and never actually change the
-        active KisTool). It's a canvas-level paint overlay, not a QCursor,
-        so our own setCursor()/unsetCursor() calls have no effect on it and
-        it would otherwise show doubled up with our own ring. Krita exposes
-        exactly this as the "toggle_brush_outline" action (bound to a
-        keyboard shortcut for users to peek under their brush while
-        painting) -- it flips between OUTLINE_NONE and whatever style was
-        last in use, so calling it once on arm and once on disarm hides it
-        while Clone Brush is enabled and symmetrically restores it after."""
-        action = Krita.instance().action("toggle_brush_outline")
-        if action is not None:
-            action.trigger()
+    def _setNativeBrushOutlineHidden(self, hidden):
+        """Forces (or restores) Krita's own brush-outline circle -- the
+        round cursor overlay the underlying native tool (e.g. Freehand
+        Brush) still draws, since we only intercept mouse events and never
+        actually change the active KisTool. It's a canvas-level paint
+        overlay, not a QCursor, so our own setCursor()/unsetCursor() calls
+        have no effect on it, and it would otherwise show doubled up with
+        our own ring/dashed-hardness circles.
+
+        This reads/writes the "newOutlineStyle" kritarc setting directly
+        (0 = OUTLINE_NONE; see enum OutlineStyle in
+        libs/global/kis_global.h in the Krita source) via
+        Krita.readSetting/writeSetting, rather than triggering Krita's own
+        "toggle_brush_outline" action. That action *flips* relative to
+        whatever state the setting is already in, which assumes it starts
+        visible -- on a machine where the user already had it off by
+        default (or had toggled it off themselves before ever enabling
+        Clone Brush), that flip turned the native circle ON instead of
+        hiding it, which is how it ended up showing a third circle
+        alongside our own two. Saving the exact previous value and
+        restoring it verbatim on disarm sidesteps that regardless of
+        starting state. Krita reads this config fresh on each paint/cursor
+        update (KisConfig wraps the same shared KSharedConfig instance
+        Krita.writeSetting() writes into), so this takes effect immediately
+        with no canvas refresh or restart needed."""
+        app = Krita.instance()
+        if hidden:
+            self._native_outline_saved = app.readSetting("", "newOutlineStyle", "2")
+            app.writeSetting("", "newOutlineStyle", "0")
+        elif self._native_outline_saved is not None:
+            app.writeSetting("", "newOutlineStyle", self._native_outline_saved)
+            self._native_outline_saved = None
 
     # --- event filter: only press/release are used; drag is timer-driven --
 
