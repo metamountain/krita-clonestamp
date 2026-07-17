@@ -4,7 +4,7 @@
 import time
 import traceback
 from krita import DockWidget, Krita
-from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt, QUrl
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QTimer, Qt, QUrl
 from PyQt5.QtGui import (
     QColor, QCursor, QDesktopServices, QIcon, QImage, QPainter, QPen, QPixmap, QRadialGradient,
 )
@@ -21,6 +21,14 @@ _debug = core._debug
 
 
 def _find_canvas_widget():
+    """Finds the QOpenGLWidget for the currently active canvas. Krita's
+    central widget can hold more than one of these at once (one per open
+    document tab/subwindow, with only the active one actually visible), so
+    picking the first match via findChild() is unreliable -- it can grab a
+    background tab's (hidden) canvas instead of the active one, leaving the
+    real on-screen canvas never getting our cursor/event-filter wiring.
+    Prefer whichever candidate is actually visible; fall back to the first
+    match if visibility can't disambiguate (e.g. only one candidate)."""
     window = Krita.instance().activeWindow()
     if window is None:
         return None
@@ -30,7 +38,18 @@ def _find_canvas_widget():
     central = qwin.centralWidget()
     if central is None:
         return None
-    return central.findChild(QOpenGLWidget)
+    candidates = central.findChildren(QOpenGLWidget)
+    for widget in candidates:
+        if widget.isVisible():
+            return widget
+    # Only fall back to a guess when there's nothing to disambiguate between
+    # (a single candidate, e.g. transiently not-yet-shown or the window is
+    # minimized) -- with multiple candidates and none visible, guessing
+    # candidates[0] would reintroduce the exact "wrong hidden canvas gets
+    # wired up" bug this visibility check exists to avoid. Callers already
+    # handle None reasonably (canvasChanged/self-heal just skip the rebind
+    # for now; _arm() reports it and leaves the tool disabled).
+    return candidates[0] if len(candidates) == 1 else None
 
 
 class SourceCrosshair(QWidget):
@@ -62,6 +81,49 @@ class SourceCrosshair(QWidget):
         painter.end()
 
 
+class StrokePreviewOverlay(QWidget):
+    """Transparent overlay showing the in-progress stroke result live during
+    a drag. Krita's Python scripting API has no undo-macro grouping (see
+    docs/CLAUDE.md), so continue_stroke() only paints into an in-memory
+    accumulator while dragging and the real layer isn't touched until
+    release (one setPixelData() call in finalize_stroke = one undo step).
+    That means the canvas itself doesn't visibly change mid-drag -- this
+    widget renders what finalize_stroke *would* currently write, purely as a
+    screen-space visual on top of the canvas, so nothing here ever touches
+    document pixels or the undo stack."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self._image = None
+        self._target_rect = None
+
+    def setPreview(self, image, target_rect):
+        """target_rect is in this widget's own local coordinates (not
+        screen/global) -- the caller keeps the widget's own OS-level window
+        geometry fixed (covering the whole canvas) and only moves where
+        *within* it the image is drawn. Resizing/moving the actual top-level
+        window on every drag tick was the previous approach, and caused
+        visible flicker on Windows: a translucent frameless window being
+        natively resized shows a blank frame from the OS compositor before
+        Qt's own repaint lands."""
+        self._image = image
+        self._target_rect = target_rect
+        self.update()
+
+    def paintEvent(self, event):
+        if self._image is None or self._target_rect is None:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.drawImage(self._target_rect, self._image)
+        painter.end()
+
+
 class ClonestampDocker(DockWidget):
 
     def __init__(self):
@@ -70,6 +132,18 @@ class ClonestampDocker(DockWidget):
 
         self._canvas_widget = None
         self._stroke_active = False
+        # The document and canvas a stroke is painting into, pinned at press
+        # time and reused for the whole stroke (continue_stroke ticks +
+        # release) instead of re-fetching Krita.instance().activeDocument()/
+        # _currentCanvas() at each step -- otherwise switching the active
+        # document mid-drag (e.g. Ctrl+Tab while still holding the mouse
+        # button) would silently finish compositing/writing into a different
+        # document than the one the accumulator's rect math was built
+        # against, using that other document's zoom/pan for the coordinate
+        # mapping to boot. canvasChanged() defers rebinding self._canvas_widget
+        # itself while a stroke is active for the same reason (see there).
+        self._stroke_doc = None
+        self._stroke_canvas = None
         self._resize_active = False
         self._resize_start_global = None
         self._resize_start_size = None
@@ -92,6 +166,18 @@ class ClonestampDocker(DockWidget):
         self._tick_first_t = 0.0
         self._tick_last_t = 0.0
         self._crosshair = SourceCrosshair()
+
+        # Live on-canvas preview of the in-progress stroke (see
+        # StrokePreviewOverlay) -- recomputed at this throttled cadence
+        # rather than every ~16ms tick, since it involves a real
+        # dst_node.pixelData() read over the (growing) accumulator bounds.
+        # 100ms/10Hz mirrors the same "expensive work throttled, cheap
+        # position work every tick" split already validated for the cursor
+        # content preview (_preview_cache_*) at 200ms/5Hz, just a bit faster
+        # since a painted result reads as laggier than a hover-only preview.
+        self._stroke_preview = StrokePreviewOverlay()
+        self._stroke_preview_time = 0.0
+        self._STROKE_PREVIEW_INTERVAL = 0.1
 
         # Cache for the live content-preview patch (see _updateBrushCursor).
         # Rebuilding it (image scale + soft-mask paint) on every drag tick
@@ -224,7 +310,58 @@ class ClonestampDocker(DockWidget):
     # --- lifecycle -------------------------------------------------------
 
     def canvasChanged(self, canvas):
-        pass
+        """Krita calls this whenever the active canvas changes -- switching
+        document tabs, opening a new document, switching windows. Without
+        this, self._canvas_widget (captured once in _arm()) would keep
+        pointing at whatever canvas was active at arm time: our event filter
+        checks `obj is not self._canvas_widget`, so clicks on a newly active
+        canvas would silently fall through to Krita's native tool instead of
+        Clone Stamp, needing a manual disable/re-enable of the checkbox to
+        "reset" and re-resolve it. Rebinding here keeps it live instead.
+
+        This notification isn't the only path that rebinds, though -- see
+        eventFilter()'s self-heal branch for why a brand new document (as
+        opposed to switching between already-open ones) can't fully rely on
+        this firing at the right time."""
+        if not self.enableCheck.isChecked():
+            return
+        new_widget = _find_canvas_widget()
+        if new_widget is None or new_widget is self._canvas_widget:
+            return
+        self._rebindCanvasWidget(new_widget)
+
+    def _rebindCanvasWidget(self, new_widget):
+        """Switches self._canvas_widget to new_widget and refreshes the
+        cursor/crosshair state to match -- shared by canvasChanged() (Krita's
+        own notification) and eventFilter()'s self-heal path. Returns
+        whether it actually rebound (callers that need the rebind to have
+        happened before proceeding, e.g. eventFilter's self-heal, must check
+        this rather than assume success)."""
+        if self._stroke_active or self._resize_active:
+            # Defer: an in-progress stroke/resize pins self._stroke_doc /
+            # self._stroke_canvas (see __init__) and keeps polling
+            # self._canvas_widget every tick via those pinned references.
+            # Rebinding mid-operation would desync self._canvas_widget's
+            # screen geometry from the still-pinned canvas/document, feeding
+            # continue_stroke doc-space coordinates mapped through one
+            # document's canvas while writing into another. The next
+            # canvasChanged (or the next click, via self-heal) picks this up
+            # once the operation naturally ends at release.
+            return False
+        self._canvas_widget = new_widget
+        self._last_cursor_key = None
+        self._last_cursor_pixmap = None
+        self._updateBrushCursor()
+        c = self._currentCanvas()
+        if c:
+            self._last_cursor_zoom = c.zoomLevel()
+        self._last_cursor_size = core.STATE.brush_size
+        if core.STATE.has_point_source:
+            self._ch_timer.start()
+            self._positionCrosshair()
+        else:
+            self._crosshair.hide()
+        return True
 
     def closeEvent(self, event):
         self._disarm()
@@ -270,6 +407,15 @@ class ClonestampDocker(DockWidget):
         """Move the crosshair widget to the screen position of source_point.
         Lightweight: calls zoomLevel/preferredCenter but no pixel I/O."""
         if not core.STATE.has_point_source or self._canvas_widget is None:
+            self._crosshair.hide()
+            return
+        if QApplication.instance().applicationState() != Qt.ApplicationActive:
+            # The crosshair is an always-on-top OS-level overlay
+            # (WindowStaysOnTopHint) positioned in absolute screen
+            # coordinates, not clipped to Krita's own window -- without this
+            # check it keeps floating visibly on top of whatever other
+            # application the user switched to instead of hiding along with
+            # Krita.
             self._crosshair.hide()
             return
         canvas = self._currentCanvas()
@@ -318,10 +464,21 @@ class ClonestampDocker(DockWidget):
     def _disarm(self):
         self._ch_timer.stop()
         self._crosshair.hide()
+        self._stroke_preview.hide()
         if self._canvas_widget is not None:
-            QApplication.instance().removeEventFilter(self)
-            self._canvas_widget.unsetCursor()
-            self._setNativeBrushOutlineHidden(False)
+            # Best-effort: the canvas widget may already be a dead Qt object
+            # here (e.g. its document/view was closed while Clone Brush was
+            # still armed). Without the try/except, an exception from either
+            # call below would skip _setNativeBrushOutlineHidden(False) next
+            # -- and since that's a persisted kritarc setting, not in-memory
+            # Krita state, skipping it leaves Krita's own brush-outline
+            # circle hidden even after quitting and relaunching Krita.
+            try:
+                QApplication.instance().removeEventFilter(self)
+                self._canvas_widget.unsetCursor()
+            except Exception as e:
+                _debug("_disarm: canvas widget cleanup failed: %s" % e, force=True)
+        self._setNativeBrushOutlineHidden(False)
         # unsetCursor() above bypasses the _updateBrushCursor rebuild memo,
         # so without this a rearm whose key happens to match the pre-disarm
         # state would skip setCursor() and leave the default OS cursor
@@ -370,10 +527,31 @@ class ClonestampDocker(DockWidget):
     # --- event filter: only press/release are used; drag is timer-driven --
 
     def eventFilter(self, obj, event):
-        if obj is not self._canvas_widget:
-            return False
-
         et = event.type()
+        if obj is not self._canvas_widget:
+            # Self-heal against canvasChanged() lagging or being skipped for
+            # some transitions -- observed: File > New can leave Clone Brush
+            # enabled but inert, still bound to the previous document's now-
+            # inactive canvas widget, because Krita's canvasChanged
+            # notification for a brand-new canvas isn't as reliably timed as
+            # for switching between already-open documents (see
+            # canvasChanged()/_rebindCanvasWidget for the normal path). If
+            # this press/release actually lands on what _find_canvas_widget()
+            # currently resolves as the active canvas, rebind here instead of
+            # silently dropping the event -- cheap, since it only runs on the
+            # rare event that arrives for a widget we're not already bound to.
+            if not (self.enableCheck.isChecked()
+                    and et in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease)
+                    and isinstance(obj, QOpenGLWidget)
+                    and _find_canvas_widget() is obj
+                    and self._rebindCanvasWidget(obj)):
+                # Either this isn't a plausible rebind candidate, or
+                # _rebindCanvasWidget deferred because a stroke/resize is
+                # still active on the widget we were already bound to (see
+                # there) -- don't fall through and process this event
+                # against a widget we didn't actually rebind to.
+                return False
+
         try:
             if et == QEvent.MouseButtonPress:
                 return self._onCanvasPress(event)
@@ -441,9 +619,18 @@ class ClonestampDocker(DockWidget):
             else:
                 core.begin_stroke(core.STATE, doc, doc_point)
                 self._stroke_active = True
+                # Pinned for the whole stroke (see the field comments in
+                # __init__) instead of re-fetching activeDocument()/
+                # _currentCanvas() on every tick/at release.
+                self._stroke_doc = doc
+                self._stroke_canvas = canvas
                 self._tick_counter = 0
                 self._crosshair.hide()
                 self._ch_timer.stop()
+                # Reset the throttle so the first tick shows a preview right
+                # away instead of waiting out a stale interval left over
+                # from the previous stroke.
+                self._stroke_preview_time = 0.0
                 self._timer.start()
                 self.brushStatusLabel.setText("Drag to paint...")
         except core.ClonestampError as e:
@@ -465,17 +652,40 @@ class ClonestampDocker(DockWidget):
                 avg_ms = span_ms / (self._tick_counter - 1)
                 _debug("stroke ticks: n=%d avg_dt=%.1fms span=%.0fms"
                        % (self._tick_counter, avg_ms, span_ms), force=True)
-            doc = Krita.instance().activeDocument()
-            if doc is not None:
-                result = core.finalize_stroke(doc, core.STATE)
-                if result is not None:
-                    self.brushStatusLabel.setText(
-                        "Stroke painted at ({0}, {1})".format(result.x(), result.y()))
-            core.end_stroke(core.STATE)
-            self._stroke_active = False
-            self._crosshair.show()
-            self._ch_timer.start()
-            self._positionCrosshair()
+            # The document pinned at press time (see self._stroke_doc), not
+            # Krita.instance().activeDocument() -- same reasoning as
+            # _onTimerTick.
+            doc = self._stroke_doc
+            try:
+                if doc is not None:
+                    result = core.finalize_stroke(doc, core.STATE)
+                    if result is not None:
+                        self.brushStatusLabel.setText(
+                            "Stroke painted at ({0}, {1})".format(result.x(), result.y()))
+            except core.ClonestampError as e:
+                # finalize_stroke can still raise (e.g. the source layer's
+                # type/color space changed mid-drag) -- without this, every
+                # line below would be skipped: end_stroke never runs, the
+                # timer/stroke_active flags are left stuck (so hover
+                # movement alone starts getting treated as an active
+                # stroke), and the preview overlay is left visibly pinned on
+                # screen showing paint that was never actually written.
+                self.brushStatusLabel.setText(str(e))
+                self._warn(str(e))
+            finally:
+                core.end_stroke(core.STATE)
+                core.STATE.clear_accumulator()
+                self._stroke_active = False
+                self._stroke_doc = None
+                self._stroke_canvas = None
+                # The real layer now shows the finalized result
+                # (finalize_stroke just wrote it), so the visual-only
+                # preview overlay would either double-render it or show a
+                # stale frame -- hide it.
+                self._stroke_preview.hide()
+                self._crosshair.show()
+                self._ch_timer.start()
+                self._positionCrosshair()
         if self._resize_active:
             self._resize_active = False
             cursor_brush_status = (
@@ -510,7 +720,9 @@ class ClonestampDocker(DockWidget):
             self._tick_first_t = now
         self._tick_last_t = now
         local_pos = self._canvas_widget.mapFromGlobal(QCursor.pos())
-        canvas = self._currentCanvas()
+        # Pinned at press time (see self._stroke_canvas), not re-fetched --
+        # see the comment there for why.
+        canvas = self._stroke_canvas
         if canvas is None or not core.coordinate_mapping_reliable(canvas):
             return
         doc_point = core.map_widget_to_document(canvas, self._canvas_widget, QPointF(local_pos))
@@ -518,7 +730,14 @@ class ClonestampDocker(DockWidget):
             return
         zoom = canvas.zoomLevel()
 
-        doc = Krita.instance().activeDocument()
+        # The document the stroke began on (see self._stroke_doc), not
+        # Krita.instance().activeDocument() -- if the active document
+        # changed mid-drag (e.g. Ctrl+Tab while still holding the mouse
+        # button), re-fetching here would feed this stroke's accumulator
+        # doc-space coordinates computed against a different document's
+        # canvas/zoom, and finalize_stroke would go on to composite/write
+        # into the wrong document entirely.
+        doc = self._stroke_doc
         try:
             result = core.continue_stroke(doc, core.STATE, doc_point)
             if result is None and self.brushStatusLabel.text() == "":
@@ -527,6 +746,8 @@ class ClonestampDocker(DockWidget):
             self.brushStatusLabel.setText(str(e))
             self._stroke_active = False
             return
+
+        self._updateStrokePreview(doc, canvas, now)
 
         # Cursor refresh -- every tick while a source is armed, so the red
         # source-offset crosshair tracks the actual cursor during a drag
@@ -540,6 +761,67 @@ class ClonestampDocker(DockWidget):
             self._updateBrushCursor(doc_point)
         elif zoom_changed or size_changed:
             self._updateBrushCursor()
+
+    def _updateStrokePreview(self, doc, canvas, now):
+        """Refreshes the live stroke-preview overlay (see
+        StrokePreviewOverlay) at a throttled cadence -- see
+        self._STROKE_PREVIEW_INTERVAL for why. A no-op if called again
+        before that interval elapses."""
+        if now - self._stroke_preview_time < self._STROKE_PREVIEW_INTERVAL:
+            return
+        self._stroke_preview_time = now
+        if doc is None or canvas is None or not core.coordinate_mapping_reliable(canvas):
+            return
+        if QApplication.instance().applicationState() != Qt.ApplicationActive:
+            # Same always-on-top-overlay concern as _positionCrosshair --
+            # without this, dragging and then alt-tabbing away mid-stroke
+            # would leave the painted preview floating over whatever other
+            # application now has focus.
+            self._stroke_preview.hide()
+            return
+        try:
+            result = core.preview_stroke_composite(doc, core.STATE)
+        except core.ClonestampError:
+            # Read-only despite the name (see preview_stroke_composite's
+            # docstring), but it still runs the same validation as
+            # finalize_stroke (paint-layer/color-space/locked checks) --
+            # unlike continue_stroke's identical exception a few lines
+            # above, this one isn't fatal to the stroke (the accumulator
+            # itself is unaffected), so just skip this frame's preview
+            # rather than aborting the drag.
+            self._stroke_preview.hide()
+            return
+        if result is None:
+            self._stroke_preview.hide()
+            return
+        dst_rect, image = result
+
+        # Keep the overlay's own OS-level window pinned to the canvas
+        # widget's screen rect and only touch it (one native move+resize)
+        # when that rect actually changed -- e.g. the Krita window itself
+        # moved/resized mid-drag, which is rare. Under normal painting this
+        # reduces to a no-op every tick, which is what actually eliminates
+        # the flicker (see StrokePreviewOverlay.setPreview): the drawn
+        # *content* still moves every tick via a plain repaint, cheap and
+        # flicker-free since it never touches the native window geometry.
+        canvas_origin = self._canvas_widget.mapToGlobal(QPoint(0, 0))
+        canvas_geo = QRect(canvas_origin, self._canvas_widget.size())
+        if self._stroke_preview.geometry() != canvas_geo:
+            self._stroke_preview.setGeometry(canvas_geo)
+
+        zoom = canvas.zoomLevel()
+        pref = canvas.preferredCenter()
+        cw = self._canvas_widget.width()
+        ch = self._canvas_widget.height()
+        lx = (dst_rect.x() - pref.x()) * zoom + cw / 2.0
+        ly = (dst_rect.y() - pref.y()) * zoom + ch / 2.0
+        lw = max(1, int(round(dst_rect.width() * zoom)))
+        lh = max(1, int(round(dst_rect.height() * zoom)))
+        target_rect = QRect(int(round(lx)), int(round(ly)), lw, lh)
+
+        self._stroke_preview.setPreview(image, target_rect)
+        if not self._stroke_preview.isVisible():
+            self._stroke_preview.show()
 
     def _onCrosshairTick(self):
         self._positionCrosshair()

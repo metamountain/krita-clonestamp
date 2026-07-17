@@ -408,26 +408,25 @@ def preview_patch(state, cursor_doc_pos, doc_size):
     return patch
 
 
-def finalize_stroke(doc, state):
-    _debug("finalize_stroke: acc=%s bounds=%s" % (
-        "EXISTS" if state._acc_image else "NONE",
-        state._acc_bounds))
+def _compute_stroke_composite(doc, state):
+    """Shared math for finalize_stroke and preview_stroke_composite: composites
+    the current accumulator's masked source over a live read of the
+    destination layer and returns (dst_rect, composited_image), or None if
+    there's nothing to composite. Read-only -- never writes to the document
+    or mutates state; callers own writing the result back (finalize_stroke)
+    and/or clearing the accumulator."""
     if state._acc_image is None or state._acc_bounds is None:
-        _debug("finalize_stroke: nothing to paint (no accumulator)")
         return None
 
     dst_node = doc.activeNode()
     if dst_node is None or dst_node.locked():
-        _debug("finalize_stroke: dst_node=%s locked=%s" % (
+        _debug("_compute_stroke_composite: dst_node=%s locked=%s" % (
             dst_node.name() if dst_node else "NONE",
             dst_node.locked() if dst_node else "N/A"))
-        state.clear_accumulator()
         return None
 
     src_node = state.source_node
     if src_node is None:
-        _debug("finalize_stroke: src_node is None")
-        state.clear_accumulator()
         return None
 
     read_fn, src_bounds = _resolve_source(doc, src_node, state.sample_scope)
@@ -436,11 +435,8 @@ def finalize_stroke(doc, state):
         _ensure_color_space(src_node, "read from")
 
     doc_bounds = doc.bounds()
-    _debug("finalize_stroke: doc_bounds=%s src_bounds=%s" % (doc_bounds, src_bounds))
     mask_rect = state._acc_bounds.intersected(doc_bounds)
-    _debug("finalize_stroke: mask_rect=%s" % (mask_rect,))
     if mask_rect.isEmpty():
-        state.clear_accumulator()
         return None
 
     # Source position = destination + stroke offset.
@@ -458,8 +454,6 @@ def finalize_stroke(doc, state):
     dst_clip = dst_full.intersected(doc_bounds)
 
     if src_clip.isEmpty() or dst_clip.isEmpty():
-        _debug("finalize_stroke: src_clip=%s dst_clip=%s EMPTY -- abort" % (src_clip, dst_clip))
-        state.clear_accumulator()
         return None
 
     # Shrink both rects by whichever side needs it more, so they stay the
@@ -474,13 +468,10 @@ def finalize_stroke(doc, state):
     final_w = mask_rect.width() - left - right
     final_h = mask_rect.height() - top - bottom
     if final_w <= 0 or final_h <= 0:
-        _debug("finalize_stroke: final rect is empty (%dx%d)" % (final_w, final_h))
-        state.clear_accumulator()
         return None
 
     src_rect = QRect(src_full.x() + left, src_full.y() + top, final_w, final_h)
     dst_rect = QRect(dst_full.x() + left, dst_full.y() + top, final_w, final_h)
-    _debug("finalize_stroke: src_rect=%s dst_rect=%s" % (src_rect, dst_rect))
 
     # Slice the accumulator: _acc_left/_acc_top is the accumulator origin
     # (= document origin), not _acc_bounds.
@@ -508,8 +499,6 @@ def finalize_stroke(doc, state):
 
     # Read mask slice.
     mask_image = state._acc_image.copy(mask_sx, mask_sy, final_w, final_h)
-    _debug("finalize_stroke: mask slice size=%dx%d null=%s" % (
-        mask_image.width(), mask_image.height(), mask_image.isNull()))
 
     # Step 1: multiply source by mask alpha (DestinationIn).
     painter = QPainter(src_image)
@@ -523,7 +512,36 @@ def finalize_stroke(doc, state):
     painter.drawImage(0, 0, src_image)
     painter.end()
 
-    # Write back.
+    return dst_rect, dst_image
+
+
+def preview_stroke_composite(doc, state):
+    """Read-only preview of what finalize_stroke would currently write --
+    same compositing math, but never touches the document or the
+    accumulator. Krita's Python scripting API has no undo-macro grouping
+    (see docs/CLAUDE.md), so continue_stroke only paints into an in-memory
+    accumulator during a drag and finalize_stroke does the one real
+    setPixelData() call on release, keeping each stroke a single undo step.
+    That means the canvas itself doesn't change while dragging -- this
+    function lets the docker render a live on-canvas overlay of the
+    in-progress result instead, safe to call repeatedly mid-stroke since it
+    never writes anything."""
+    return _compute_stroke_composite(doc, state)
+
+
+def finalize_stroke(doc, state):
+    _debug("finalize_stroke: acc=%s bounds=%s" % (
+        "EXISTS" if state._acc_image else "NONE",
+        state._acc_bounds))
+    result = _compute_stroke_composite(doc, state)
+    if result is None:
+        _debug("finalize_stroke: nothing to composite")
+        state.clear_accumulator()
+        return None
+    dst_rect, dst_image = result
+
+    dst_node = doc.activeNode()
+    final_w, final_h = dst_rect.width(), dst_rect.height()
     result_bytes = _image_bytes(dst_image)
     _debug("finalize_stroke: write %d bytes @ (%d,%d) %dx%d" % (
         len(result_bytes), dst_rect.x(), dst_rect.y(), final_w, final_h))
