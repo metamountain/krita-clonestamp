@@ -323,12 +323,53 @@ class ClonestampDocker(DockWidget):
         eventFilter()'s self-heal branch for why a brand new document (as
         opposed to switching between already-open ones) can't fully rely on
         this firing at the right time."""
+        self._clearSourceIfDocumentChanged()
         if not self.enableCheck.isChecked():
             return
         new_widget = _find_canvas_widget()
         if new_widget is None or new_widget is self._canvas_widget:
             return
         self._rebindCanvasWidget(new_widget)
+
+    def _clearSourceIfDocumentChanged(self):
+        """Drops a stale clone source left over from a different document --
+        see ClonestampState.source_doc for why this has to be checked
+        explicitly: core.STATE is one module-level object shared across
+        every open document, so nothing else notices when the active
+        document changes out from under a previously-sampled source. Without
+        this, opening/switching to a different document leaves the cursor
+        trying to preview a source point and frozen pixel snapshot that
+        belong to the *previous* document -- garbage offsets, wrong-image
+        ghost preview -- and it stays broken until Krita itself restarts
+        (nothing else resets the module-level STATE), which is why toggling
+        the Enable checkbox alone was never enough to fix it.
+
+        Runs regardless of whether Clone Brush is currently enabled, and
+        regardless of whether the canvas *widget* identity changed --
+        Krita's default Tabbed view mode reuses a single canvas widget
+        across document tabs, so _find_canvas_widget() returning the same
+        object is not a reliable signal that the document didn't change."""
+        if self._stroke_active or self._resize_active:
+            # Same reasoning as _rebindCanvasWidget's own guard: don't pull
+            # the source out from under a stroke/resize already using it.
+            # core.begin_stroke's own document guard is the backstop if a
+            # document switch ever slips through mid-drag.
+            return
+        if core.STATE.source_doc is None:
+            return
+        doc = Krita.instance().activeDocument()
+        if doc is None or doc is core.STATE.source_doc:
+            return
+        core.STATE.clear_source()
+        self.liveSourceLabel.setText("Source: none")
+        self._crosshair.hide()
+        self._ch_timer.stop()
+        self._last_cursor_key = None
+        self._last_cursor_pixmap = None
+        if self._canvas_widget is not None:
+            self._updateBrushCursor()
+        self.brushStatusLabel.setText(
+            "Source cleared -- switched to a different document.")
 
     def _rebindCanvasWidget(self, new_widget):
         """Switches self._canvas_widget to new_widget and refreshes the
@@ -442,6 +483,7 @@ class ClonestampDocker(DockWidget):
             self._disarm()
 
     def _arm(self):
+        self._clearSourceIfDocumentChanged()
         widget = _find_canvas_widget()
         if widget is None:
             self.brushStatusLabel.setText(
@@ -824,6 +866,15 @@ class ClonestampDocker(DockWidget):
             self._stroke_preview.show()
 
     def _onCrosshairTick(self):
+        # Belt-and-suspenders alongside canvasChanged() -- this timer only
+        # runs while a source is armed (see _arm/_rebindCanvasWidget/
+        # sample_source_point), which is exactly when a stale cross-document
+        # source actually matters, so catch it here too within one tick
+        # (200ms) even on the rare transition where canvasChanged doesn't
+        # fire in time (see _clearSourceIfDocumentChanged).
+        self._clearSourceIfDocumentChanged()
+        if not core.STATE.has_point_source:
+            return
         self._positionCrosshair()
         # Also refresh the cursor's content preview from the live hover
         # position (5Hz -- cheap Qt-only image ops, no Krita API calls, same

@@ -64,6 +64,16 @@ class ClonestampState:
     def __init__(self):
         self.source_node = None
         self.source_point = None
+        # The document source_node/source_point were sampled from (see
+        # sample_source_point). STATE is a single module-level object shared
+        # across every open document/canvas (see STATE below) -- nothing
+        # else scopes it per-document, so without tracking this, switching
+        # to a different document leaves a stale source pointing at the
+        # previous document's layer and pixels: cursor previews render
+        # garbage (wrong-document offset/pixels), and painting without
+        # re-sampling would clone from the wrong document entirely. See
+        # clear_source() and begin_stroke()'s guard.
+        self.source_doc = None
         self.aligned = True
         self.stroke_offset = None
         self.last_dab_point = None
@@ -105,6 +115,22 @@ class ClonestampState:
     def clear_accumulator(self):
         self._acc_image = None
         self._acc_bounds = None
+
+    def clear_source(self):
+        """Drops the sampled clone source and everything derived from it --
+        used when the active document changes, since a source point/pixel
+        snapshot sampled from one document is meaningless (or actively
+        wrong) once a different document becomes active. See the comment on
+        source_doc above for why this needs to exist at all."""
+        self.source_node = None
+        self.source_point = None
+        self.source_doc = None
+        self.stroke_offset = None
+        self.last_dab_point = None
+        self._source_snapshot = None
+        self._source_snapshot_left = 0
+        self._source_snapshot_top = 0
+        self.clear_accumulator()
 
 
 STATE = ClonestampState()
@@ -162,6 +188,7 @@ def sample_source_point(doc, state, doc_point):
 
     state.source_node = node
     state.source_point = QPointF(doc_point)
+    state.source_doc = doc
     state.stroke_offset = None
     state.last_dab_point = None
     _snapshot_source(doc, state, node)
@@ -284,6 +311,17 @@ def begin_stroke(state, doc, doc_point):
             "Ctrl+click on the canvas first to set a clone source.")
     if doc is None:
         raise ClonestampError("No active document.")
+    if state.source_doc is not None and state.source_doc is not doc:
+        # Last-resort guard: STATE is shared across every open
+        # document/canvas (see ClonestampState.source_doc), so a source
+        # sampled in a different document must never be used to paint here
+        # -- it would clone pixels from the wrong document entirely. The
+        # docker proactively clears the source on a detected document
+        # switch (see canvasChanged), so this should rarely actually fire,
+        # but painting is exactly the operation that must never slip past it.
+        raise ClonestampError(
+            "Clone source was sampled in a different document. "
+            "Ctrl+click on this document to set a new source first.")
     if not (state.aligned and state.stroke_offset is not None):
         state.stroke_offset = QPointF(
             state.source_point.x() - doc_point.x(),
