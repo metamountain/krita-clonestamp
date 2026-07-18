@@ -26,11 +26,11 @@ exactly how this was put together, including the mistakes and dead ends.
 
 - **`python-plugin/`** — the tool you can actually install today. Pure
   Python, no build step, works with your existing Krita installation.
-- **`native-plugin-patch/`** — a native C++ `KisTool` implementation of the
+- **`Tool-plugin/`** — a native C++ `KisTool` implementation of the
   same tool, meant to eventually be proposed for upstream inclusion in
   Krita itself (so it would get a real toolbox icon next to Pan/Zoom,
   instead of a floating preview window). **Not installable on its own** —
-  see `native-plugin-patch/NOTE.md` for why and what building it requires.
+  see `Tool-plugin/NOTE.md` for why and what building it requires.
 - **`docs/`** — the build/debugging log from developing both versions:
   environment setup, bugs hit and fixed, design decisions and why.
 
@@ -98,7 +98,7 @@ supported way to drop it into someone else's existing Krita installation).
 ## License
 
 GPL-2.0-or-later (see `LICENSE`) for this repository overall and the
-`native-plugin-patch/` code specifically, since it's derived from and
+`Tool-plugin/` code specifically, since it's derived from and
 links against Krita's own GPL codebase.
 
 `python-plugin/` is separately licensed **CC0-1.0** (public domain
