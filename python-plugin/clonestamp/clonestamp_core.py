@@ -46,6 +46,11 @@ import os
 from PyQt5.QtCore import QRect, QRectF, QByteArray, Qt, QPointF
 from PyQt5.QtGui import QImage, QPainter, QColor, QRadialGradient
 
+# Windows-only by design: TEMP (and the backslash separator) only resolve to
+# a real location there. On Linux/macOS TEMP is normally unset, the path
+# degenerates to a relative "\\clonestamp_debug.txt", and _debug()'s
+# try/except turns every log call into a silent no-op -- acceptable, since
+# this logging exists for debugging the primary (Windows) install.
 _DEBUG_LOG = os.environ.get("TEMP", "") + "\\clonestamp_debug.txt"
 
 # Diagnostic logging is off by default: _debug() writes to a real file on disk,
@@ -69,7 +74,7 @@ def _debug(msg, force=False):
 SUPPORTED_COLOR_MODEL = "RGBA"
 SUPPORTED_COLOR_DEPTH = "U8"
 
-VERSION = "1.4.8"
+VERSION = "1.5.1"
 GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
 
 # Krita's default 8-bit RGBA layers store pixels as straight (non-premultiplied)
@@ -181,6 +186,13 @@ def _ensure_color_space(node, action):
 # ---------------------------------------------------------------------------
 
 def map_widget_to_document(canvas, widget, local_pos):
+    """Widget-local position -> document pixel position, assuming no canvas
+    rotation/mirroring (see coordinate_mapping_reliable). Derivation: Krita
+    keeps canvas.preferredCenter() -- a document-space point -- rendered at
+    the center of the canvas widget, and everything scales around that
+    center by the zoom factor. So a widget point's offset from the widget
+    center, divided by zoom to convert screen pixels back to document
+    pixels, is its offset from preferredCenter in document space."""
     zoom = canvas.zoomLevel()
     if not zoom:
         return None
@@ -254,6 +266,19 @@ def _snapshot_source(doc, state, node):
 # ---------------------------------------------------------------------------
 
 def _ensure_accumulator(state, doc_bounds):
+    """Allocates the stroke accumulator (see ClonestampState._acc_image) if
+    one isn't already active; returns False when the document is too large
+    to allocate one at all (caller turns that into a user-facing error).
+
+    Deliberately sized to the WHOLE document rather than grown lazily to the
+    stroke's dirty bounds: a stroke can wander anywhere, and resizing a
+    QImage mid-stroke while preserving painted content is exactly the kind
+    of offset-arithmetic this project has already had bugs in (see the
+    _acc_left/_acc_bounds distinction in finalize_stroke). Whole-doc sizing
+    keeps every dab's accumulator coordinates trivially derivable from its
+    document coordinates. The cost is memory (4 bytes/px, capped by
+    MAX_ACCUMULATOR_PIXELS at ~800MB); dirty-bounds sizing is the known
+    future optimization if that cap ever bites in practice."""
     if state._acc_image is not None:
         return True
     w = doc_bounds.width()
@@ -270,7 +295,28 @@ def _ensure_accumulator(state, doc_bounds):
     return True
 
 
+# Cache for _build_soft_circle: a stroke stamps the same circle for every
+# dab (size/hardness/opacity almost never change mid-stroke), and repainting
+# the radial gradient dozens of times per drag was pure waste. A small dict
+# rather than a single entry because two different circles are alive at once
+# during a drag -- the dab circle (document size, brush opacity) and the
+# cursor preview's mask (screen diameter, fixed 70) -- and a single slot
+# would thrash between them. Cleared when it grows past a handful of entries
+# (resize drags churn through sizes); each entry is at most a few MB.
+_soft_circle_cache = {}
+_SOFT_CIRCLE_CACHE_MAX = 8
+
+
 def _build_soft_circle(size, hardness, opacity_pct):
+    """White circle with the hardness falloff and opacity baked into its
+    alpha: solid out to `hardness` (fraction of the radius), then fading to
+    transparent at the rim. Returns a cached instance when the parameters
+    are unchanged -- callers must treat the result as read-only."""
+    key = (size, hardness, opacity_pct)
+    cached = _soft_circle_cache.get(key)
+    if cached is not None:
+        return cached
+
     img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
     img.fill(Qt.transparent)
     painter = QPainter(img)
@@ -286,6 +332,9 @@ def _build_soft_circle(size, hardness, opacity_pct):
     painter.setBrush(grad)
     painter.drawEllipse(QRectF(0, 0, size, size))
     painter.end()
+    if len(_soft_circle_cache) >= _SOFT_CIRCLE_CACHE_MAX:
+        _soft_circle_cache.clear()
+    _soft_circle_cache[key] = img
     return img
 
 
@@ -361,9 +410,17 @@ def begin_stroke(state, doc, doc_point):
                 bounds.width() * bounds.height(), MAX_ACCUMULATOR_PIXELS))
 
 
-def continue_stroke(doc, state, doc_point, min_spacing=2.0):
+def continue_stroke(doc, state, doc_point, min_spacing=None):
     if state.stroke_offset is None:
         return None
+
+    if min_spacing is None:
+        # Dab spacing scales with brush size: overlapping soft circles union
+        # to a smooth mask, so at 15% of the diameter (well under Photoshop's
+        # 25% default brush spacing) no scalloping is visible, while the
+        # default 250px brush stamps ~19x fewer dabs than the old fixed
+        # 2px spacing did.
+        min_spacing = max(2.0, state.brush_size * 0.15)
 
     if state.last_dab_point is not None:
         dx = doc_point.x() - state.last_dab_point.x()
