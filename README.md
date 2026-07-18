@@ -95,12 +95,31 @@ worth knowing about if something looks off:
   in the wrong state.
 - **A whole drag stroke is composited in memory and written to the layer
   in one `setPixelData` call at release**, rather than committing each dab
-  immediately — this is what gives it a single undo step per stroke, but
-  it also means large canvases with big/soft brushes hold a sizeable pixel
-  buffer in memory for the duration of the drag. This accumulator path has
-  had real correctness bugs in its history (clipping/offset edge cases on
-  large canvases) — fixed as found, but it's the part of the codebase
-  most likely to still have an edge case lurking.
+  immediately — this is what gives it a single undo step per stroke (Krita's
+  scripting API has no undo-grouping/macro call to fall back on, so this is
+  the only way to get one undo step per stroke at all). It also means large
+  canvases with big/soft brushes hold a sizeable pixel buffer in memory for
+  the duration of the drag. This accumulator path has had real correctness
+  bugs in its history (clipping/offset edge cases on large canvases) — fixed
+  as found, but it's the part of the codebase most likely to still have an
+  edge case lurking.
+- **What you see on canvas while dragging is a live preview, not the real
+  pixels yet.** Since the real write only happens at release, a
+  screen-space overlay widget mirrors the stroke as you drag by stamping
+  each dab's masked source patch straight into an offscreen pixmap (no
+  Krita API calls, so no extra lag or undo steps). It's an approximation:
+  each dab blends on top of the last as it's drawn, while the real commit
+  unions the whole stroke's alpha mask and blends once — so with soft/low-
+  opacity brushes on a slow stroke, overlapping dabs can look slightly more
+  built-up during the drag than the final result. The final pixels are
+  always computed the correct way regardless of what the preview showed.
+- **The brush ring disappears while Shift-dragging to resize.** This is
+  intentional, not a bug: the resize gesture works by warping the OS cursor
+  back to where the drag started every tick so it feels pinned in place
+  (Photoshop-style), and redrawing the ring cursor on top of that every
+  tick as well caused visible flicker. Size/hardness still update live in
+  the status label and spin boxes; the ring itself just switches off for
+  the duration of the drag and back on at release.
 - **Rotated or mirrored canvases aren't supported** — the plugin detects
   this and shows a status message asking you to reset canvas
   rotation/mirroring rather than painting with wrong coordinates.

@@ -59,6 +59,51 @@
   `krita-src` and had drifted from this repo's actual direction) and the
   empty, untracked `brush/` scaffold dir. Not yet manually verified in a
   running Krita — see Verification plan below.
+- **Python plugin: live drag preview + bugfixes + self-update (2026-07-18,
+  user hands-on tested this pass, v1.2.0 → v1.4.1)**: previously a paint
+  drag wrote nothing to canvas until mouse-release (`finalize_stroke` was
+  the only real pixel write, by design, for single-undo-step correctness —
+  confirmed via research that Krita's scripting API has no undo-macro/
+  grouping call to do better). Added `_StrokeOverlay`, a transparent
+  screen-space widget stamped with each dab's masked source patch as the
+  drag progresses, purely visual (no Krita API calls, no extra undo steps)
+  — `finalize_stroke` is unchanged and still does the one real commit at
+  release. **Required `Qt.WA_AlwaysStackOnTop`** on the overlay to actually
+  render on top of the canvas's `QOpenGLWidget` — without it Qt does not
+  guarantee child-widget stacking order against a GL surface, which was the
+  root cause of an initial "still no preview" report (the overlay was
+  painting correctly, just invisible). Also found the installed plugin at
+  `%APPDATA%\krita\pykrita\clonestamp\` is a separate copy from this repo's
+  `python-plugin/clonestamp/` source — every iteration in this pass had to
+  be explicitly copied over (`cp` + clear `__pycache__`) and Krita
+  restarted, since Python plugins only load at startup; VERSION is bumped
+  on every install specifically so the docker's UI label confirms which
+  build is actually loaded.
+  Two more user-reported bugs fixed in the same pass: (1) opening a second
+  document broke the tool silently — `canvasChanged()` was a no-op, so
+  `_canvas_widget`/the overlay were never re-resolved when the active
+  canvas changed, leaving the event filter matching mouse events against a
+  no-longer-active widget; now re-resolves and reparents overlays on every
+  canvas change. (2) Shift-drag resize's ring cursor flickered/jittered —
+  root cause: the existing warp-every-tick "scratch pad" trick
+  (`QCursor.setPos` back to the anchor every ~30ms) combined with a fresh
+  `QCursor`/`QPixmap` on every tick. First fix attempt (blank the real
+  cursor + draw a fixed-position `_RingOverlay` instead of warping) made it
+  *worse* — likely because raw `MouseMove` events are never intercepted by
+  this plugin (only Press/Release are), so Krita's own underlying tool kept
+  re-asserting its own cursor on top of the blanked one. Reverted that
+  attempt entirely. Landed instead on simply switching the ring cursor off
+  (`unsetCursor()`) for the whole resize drag and back on at release —
+  size/hardness still update live in the status label/spin boxes, just
+  with no on-canvas ring during the drag, which removes the flicker source
+  outright without needing to fight the underlying tool at all.
+  Also replaced the "Check for Updates" button's behavior (previously just
+  opened the GitHub releases page) with a real check-and-install: new
+  `clonestamp_update.py` reads `VERSION` out of `clonestamp_core.py` on the
+  `main` branch via `raw.githubusercontent.com` (no GitHub API/auth/git
+  needed), and if newer, downloads `clonestamp_core.py`/`clonestamp_docker.py`/
+  `__init__.py` into the running install (files fetched to memory first, only
+  written once all succeed, so a dropped connection can't half-update it).
 
 ## Phase D plan: CS6 options-bar parity
 

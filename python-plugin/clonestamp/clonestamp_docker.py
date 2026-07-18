@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: CC0-1.0
 # SPDX-FileCopyrightText: 2026 metamountain <mail@metamountain.net>
 
+import os
 import time
 import traceback
 from krita import DockWidget, Krita
-from PyQt5.QtCore import QEvent, QPointF, QTimer, Qt, QUrl
+from PyQt5.QtCore import QEvent, QPointF, QRectF, QTimer, Qt
 from PyQt5.QtGui import (
-    QColor, QCursor, QDesktopServices, QIcon, QImage, QPainter, QPen, QPixmap, QRadialGradient,
+    QColor, QCursor, QIcon, QImage, QPainter, QPen, QPixmap, QRadialGradient,
 )
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QOpenGLWidget,
@@ -14,6 +15,7 @@ from PyQt5.QtWidgets import (
 )
 
 from . import clonestamp_core as core
+from . import clonestamp_update as update
 
 # Single shared debug writer lives in core (gated off by default there --
 # see core._DEBUG_ENABLED for how to switch it on).
@@ -33,6 +35,60 @@ def _find_canvas_widget():
     return central.findChild(QOpenGLWidget)
 
 
+class _StrokeOverlay(QWidget):
+    """Transparent, click-through widget stacked on top of the canvas that
+    shows the in-progress stroke *while dragging*. Purely visual -- it never
+    touches the document. The real pixels are still only written once, to
+    the actual layer, at stroke release (core.finalize_stroke), so this
+    costs no extra undo step and no Krita API calls during the drag; it
+    just blits into an offscreen QPixmap using the same in-memory source
+    snapshot the cursor ghost-preview already reads from.
+
+    Note this is an approximation, not a preview of the exact final pixels:
+    each dab is composited here with its own SourceOver blend as it's
+    stamped, whereas finalize_stroke unions the whole stroke's alpha mask
+    first and blends once. Where dabs overlap (soft/low-opacity brushes,
+    slow strokes) the live preview can look slightly more built-up than the
+    final result -- acceptable for a live preview that previously showed
+    nothing at all."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        # Required for a plain child widget to actually composite on top of
+        # a QOpenGLWidget -- without this, Qt's docs note the GL surface's
+        # own native/texture compositing isn't synchronized with normal
+        # widget stacking order, so a raised child can still render *behind*
+        # the canvas on screen. This was the actual bug behind "no live
+        # preview while dragging" -- the overlay was being painted every
+        # tick, just never visible until Krita's own repaint (of the real
+        # committed pixels) took over at release.
+        self.setAttribute(Qt.WA_AlwaysStackOnTop)
+        self._pixmap = None
+
+    def reset(self, size):
+        self._pixmap = QPixmap(size)
+        self._pixmap.fill(Qt.transparent)
+        self.setGeometry(0, 0, size.width(), size.height())
+
+    def stampAt(self, target_rect, image):
+        if self._pixmap is None:
+            return
+        painter = QPainter(self._pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.drawImage(target_rect, image)
+        painter.end()
+        self.update(target_rect.toAlignedRect())
+
+    def paintEvent(self, event):
+        if self._pixmap is None:
+            return
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._pixmap)
+
+
 class ClonestampDocker(DockWidget):
 
     def __init__(self):
@@ -40,6 +96,7 @@ class ClonestampDocker(DockWidget):
         self.setWindowTitle("Clonestamp Tool with Preview")
 
         self._canvas_widget = None
+        self._overlay = None
         self._stroke_active = False
         self._resize_active = False
         self._resize_start_global = None
@@ -160,7 +217,26 @@ class ClonestampDocker(DockWidget):
     # --- lifecycle -------------------------------------------------------
 
     def canvasChanged(self, canvas):
-        pass
+        # Krita calls this whenever the active canvas changes -- opening a
+        # new document, switching tabs, closing a document, etc. Our own
+        # _canvas_widget was only ever resolved once, in _arm(), so without
+        # this the event filter kept matching mouse events against
+        # whichever canvas widget was active back when the brush was
+        # enabled -- once a second document existed, that widget was no
+        # longer the visible/active one, so the tool silently stopped
+        # responding on the new document. Re-resolving and reparenting the
+        # overlays here is what actually fixes that.
+        if not self.enableCheck.isChecked() or self._canvas_widget is None:
+            return
+        widget = _find_canvas_widget()
+        if widget is None or widget is self._canvas_widget:
+            return
+        self._teardownOverlays()
+        self._canvas_widget = widget
+        self._setupOverlays()
+        current = self._currentCanvas()
+        if current is not None:
+            self._last_cursor_zoom = current.zoomLevel()
 
     def closeEvent(self, event):
         self._disarm()
@@ -192,7 +268,34 @@ class ClonestampDocker(DockWidget):
         core.STATE.sample_scope = "all" if index == 1 else "current"
 
     def _onCheckForUpdates(self):
-        QDesktopServices.openUrl(QUrl(core.GITHUB_URL + "/releases/latest"))
+        # Synchronous on purpose -- this is a manual, infrequent button
+        # click, not something running continuously, so a few seconds of
+        # blocking UI (with the status label updated first so the user
+        # sees *why*) is a reasonable trade against the real complexity of
+        # a proper background thread for something this small.
+        self.brushStatusLabel.setText("Checking GitHub for updates...")
+        QApplication.processEvents()
+        try:
+            remote = update.fetch_remote_version()
+        except update.UpdateError as e:
+            self.brushStatusLabel.setText(str(e))
+            return
+
+        if not update.remote_version_is_newer(remote, core.VERSION):
+            self.brushStatusLabel.setText(
+                "Up to date (v{0}).".format(core.VERSION))
+            return
+
+        self.brushStatusLabel.setText("Downloading v{0}...".format(remote))
+        QApplication.processEvents()
+        try:
+            update.download_update(os.path.dirname(os.path.abspath(__file__)))
+        except update.UpdateError as e:
+            self.brushStatusLabel.setText(str(e))
+            return
+
+        self.brushStatusLabel.setText(
+            "Updated to v{0} -- restart Krita to load it.".format(remote))
 
     def _describeLiveSource(self):
         p = core.STATE.source_point
@@ -216,6 +319,7 @@ class ClonestampDocker(DockWidget):
             self.enableCheck.setChecked(False)
             return
         self._canvas_widget = widget
+        self._setupOverlays()
         QApplication.instance().installEventFilter(self)
         self._toggleNativeBrushOutline()
         self._updateBrushCursor()
@@ -238,7 +342,17 @@ class ClonestampDocker(DockWidget):
         self._stroke_active = False
         self._resize_active = False
         self._canvas_widget = None
+        self._teardownOverlays()
         self.brushStatusLabel.setText("")
+
+    def _setupOverlays(self):
+        self._overlay = _StrokeOverlay(self._canvas_widget)
+
+    def _teardownOverlays(self):
+        if self._overlay is not None:
+            self._overlay.setParent(None)
+            self._overlay.deleteLater()
+            self._overlay = None
 
     def _toggleNativeBrushOutline(self):
         """Flips Krita's own brush-outline circle (the round cursor overlay
@@ -311,6 +425,9 @@ class ClonestampDocker(DockWidget):
             self._resize_start_hardness_pct = int(round(core.STATE.brush_hardness * 100))
             self._resize_accum_dx = 0
             self._resize_accum_dy = 0
+            # Our ring cursor is switched off for the whole resize drag --
+            # see _onResizeTick for why -- and back on at release.
+            self._canvas_widget.unsetCursor()
             self._timer.start()
             return True
 
@@ -332,6 +449,10 @@ class ClonestampDocker(DockWidget):
                 self._tick_counter = 0
                 self._hover_timer.stop()
                 self._timer.start()
+                if self._overlay is not None:
+                    self._overlay.reset(self._canvas_widget.size())
+                    self._overlay.show()
+                    self._overlay.raise_()
                 self.brushStatusLabel.setText("Drag to paint...")
         except core.ClonestampError as e:
             self.brushStatusLabel.setText(str(e))
@@ -350,6 +471,8 @@ class ClonestampDocker(DockWidget):
                     self.brushStatusLabel.setText(
                         "Stroke painted at ({0}, {1})".format(result.x(), result.y()))
             core.end_stroke(core.STATE)
+            if self._overlay is not None:
+                self._overlay.setVisible(False)
             self._stroke_active = False
             self._hover_timer.start()
             self._onHoverTick()
@@ -393,7 +516,9 @@ class ClonestampDocker(DockWidget):
         doc = Krita.instance().activeDocument()
         try:
             result = core.continue_stroke(doc, core.STATE, doc_point)
-            if result is None and self.brushStatusLabel.text() == "":
+            if result is not None:
+                self._stampOverlayDab(doc_point, canvas, zoom)
+            elif self.brushStatusLabel.text() == "":
                 self.brushStatusLabel.setText("Painting...")
         except core.ClonestampError as e:
             self.brushStatusLabel.setText(str(e))
@@ -436,10 +561,26 @@ class ClonestampDocker(DockWidget):
         # The OS cursor is warped back to the drag's start position every
         # tick (below) so it stays visually anchored in place instead of
         # travelling across the screen while resizing -- Photoshop-style
-        # "scratch pad" feedback where only the brush ring changes, not the
-        # pointer position. Movement is therefore accumulated across ticks
-        # (each tick's delta is measured from the anchor we just warped
-        # back to) rather than read as one absolute offset from the start.
+        # "scratch pad" feedback. Movement is therefore accumulated across
+        # ticks (each tick's delta is measured from the anchor we just
+        # warped back to) rather than read as one absolute offset from the
+        # start.
+        #
+        # The ring cursor itself is switched off for the whole drag (see
+        # _onCanvasPress) instead of being redrawn every tick -- redrawing
+        # a fresh QPixmap/QCursor on top of a cursor that's also being
+        # warped every ~30ms was the actual source of the flicker; simply
+        # not drawing anything there removes it outright. Size/hardness
+        # still update live in the status label and spin boxes below; only
+        # the on-canvas ring is gone until release, where _onCanvasRelease
+        # switches it back on.
+        #
+        # (A blank-cursor + fixed on-screen ring overlay was tried instead
+        # of just switching the ring off, to still show *something* live --
+        # it made things worse, likely because raw MouseMove events aren't
+        # intercepted by this plugin at all, so Krita's own underlying tool
+        # kept re-asserting its own cursor on top of the blanked one during
+        # the drag. See git history around v1.3.0 if revisiting that.)
         current = QCursor.pos()
         dx = current.x() - self._resize_start_global.x()
         dy = current.y() - self._resize_start_global.y()
@@ -468,14 +609,33 @@ class ClonestampDocker(DockWidget):
             self.hardnessSpin.setValue(new_hardness_pct)
             self.hardnessSpin.blockSignals(False)
 
-        if size_changed or hardness_changed:
-            local_pos = self._canvas_widget.mapFromGlobal(current)
-            canvas = self._currentCanvas()
-            if canvas and core.coordinate_mapping_reliable(canvas):
-                doc_point = core.map_widget_to_document(canvas, self._canvas_widget, QPointF(local_pos))
-                self._updateBrushCursor(doc_point)
-            else:
-                self._updateBrushCursor()
+    def _stampOverlayDab(self, doc_point, canvas, zoom):
+        """Draws one masked source dab onto the live stroke overlay at
+        doc_point, in screen space -- called once per new dab from
+        _onTimerTick so a drag looks like it's painting continuously
+        instead of only appearing once the mouse is released. No Krita API
+        calls here, no full-image rescale -- just one in-memory patch read
+        (already cached from the source snapshot), one alpha-mask
+        composite, and one scaled QPainter blit, all Qt/CPU-only."""
+        if self._overlay is None:
+            return
+        size = max(1, core.STATE.brush_size)
+        patch = core.preview_patch(core.STATE, doc_point, size)
+        if patch is None:
+            return
+        mask = core.build_alpha_mask(size, core.STATE.brush_hardness, core.STATE.brush_opacity)
+        painter = QPainter(patch)
+        painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        painter.drawImage(0, 0, mask)
+        painter.end()
+
+        center = core.map_document_to_widget(canvas, self._canvas_widget, doc_point)
+        if center is None:
+            return
+        screen_size = max(1.0, size * zoom)
+        target = QRectF(center.x() - screen_size / 2.0, center.y() - screen_size / 2.0,
+                         screen_size, screen_size)
+        self._overlay.stampAt(target, patch)
 
     def _updateBrushCursor(self, cursor_doc_pos=None):
         """Sets the canvas cursor to a ring matching the current brush size

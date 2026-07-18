@@ -33,7 +33,7 @@ def _debug(msg, force=False):
 SUPPORTED_COLOR_MODEL = "RGBA"
 SUPPORTED_COLOR_DEPTH = "U8"
 
-VERSION = "1.2.0"
+VERSION = "1.4.1"
 GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
 
 # Krita's default 8-bit RGBA layers store pixels as straight (non-premultiplied)
@@ -138,6 +138,20 @@ def map_widget_to_document(canvas, widget, local_pos):
 
 def coordinate_mapping_reliable(canvas):
     return canvas.rotation() == 0 and not canvas.mirror()
+
+
+def map_document_to_widget(canvas, widget, doc_point):
+    """Inverse of map_widget_to_document -- used by the live stroke overlay
+    to place each dab's screen-space rect."""
+    zoom = canvas.zoomLevel()
+    if not zoom:
+        return None
+    center_x = widget.width() / 2.0
+    center_y = widget.height() / 2.0
+    pref = canvas.preferredCenter()
+    wx = center_x + (doc_point.x() - pref.x()) * zoom
+    wy = center_y + (doc_point.y() - pref.y()) * zoom
+    return QPointF(wx, wy)
 
 
 # ---------------------------------------------------------------------------
