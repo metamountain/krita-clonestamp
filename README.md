@@ -22,6 +22,13 @@ shepherd a submission through Krita's own contribution process. See
 `docs/` for the full build/debugging history — it's a detailed trail of
 exactly how this was put together, including the mistakes and dead ends.
 
+If you hit a bug: sorry in advance. This has been built and fixed
+iteratively by hands-on testing rather than a formal test suite, so there
+are almost certainly rough edges still out there. Please [open an
+issue](https://github.com/metamountain/krita-clonestamp/issues) with what
+you were doing and what went wrong — that feedback is what's kept this
+moving forward so far.
+
 ## What's in this repo
 
 - **`python-plugin/`** — the tool you can actually install today. Pure
@@ -71,6 +78,35 @@ of only being installable by building the exact matching Krita source tree
 yourself (a compiled Krita plugin's ABI is locked to the exact compiler/Qt/
 KDE-Frameworks/commit combination it was built against — there's no
 supported way to drop it into someone else's existing Krita installation).
+
+### Known limitations of the Python plugin
+
+Because it has to work entirely through Krita's scripting API rather than
+a real toolbox tool, the Python plugin leans on a few workarounds that are
+worth knowing about if something looks off:
+
+- **No real toolbox tool.** It's a docker plus a `QApplication`-global
+  mouse event filter (a technique borrowed from the Krita Artists forum,
+  since continuous mouse-move isn't exposed to scripting at all) — not an
+  actual `KisTool`. It also toggles Krita's own native brush-outline
+  cursor off and on (via the `toggle_brush_outline` action) while enabled,
+  so it can draw its own ring in its place; if the plugin is ever disarmed
+  abnormally (a crash mid-session, for example) that toggle could be left
+  in the wrong state.
+- **A whole drag stroke is composited in memory and written to the layer
+  in one `setPixelData` call at release**, rather than committing each dab
+  immediately — this is what gives it a single undo step per stroke, but
+  it also means large canvases with big/soft brushes hold a sizeable pixel
+  buffer in memory for the duration of the drag. This accumulator path has
+  had real correctness bugs in its history (clipping/offset edge cases on
+  large canvases) — fixed as found, but it's the part of the codebase
+  most likely to still have an edge case lurking.
+- **Rotated or mirrored canvases aren't supported** — the plugin detects
+  this and shows a status message asking you to reset canvas
+  rotation/mirroring rather than painting with wrong coordinates.
+- **Debug logging, if enabled, writes to disk on every stroke tick** and
+  will make drags noticeably laggy — see the debug logging note above; it
+  defaults off for this reason.
 
 ## Credits and prior art
 

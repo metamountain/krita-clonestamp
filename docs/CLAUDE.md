@@ -42,6 +42,23 @@
   `QSignalBlocker`. See `toolchain-paths.md` for the implementation
   writeup. Rebuilt, reinstalled, launched — stays running. Not yet
   manually verified.
+- **Repo rename + brush/preview pass (2026-07-18)**: this repo's native
+  half moved from `native-plugin-patch/` to `Tool-plugin/` (naming cleanup,
+  no content change — finished a rename an earlier session had left half
+  done). Both this variant and the Python plugin now share the same "clone
+  brush + preview" spec instead of drifting: default brush size 250px
+  (`m_brushSize`/`m_resizeStartSize` in `KisToolCloneStamp.h`, mirrored in
+  `krita-src`'s buildable copy), and the target/source outlines in
+  `KisToolCloneStamp::paint()` are now both a circle with a center
+  crosshair — previously only the source had a crosshair. Source is drawn
+  translucent (`QColor(255,255,255,120)`) instead of opaque white so it
+  stays visually distinguishable from the fully-opaque target. Rebuilt
+  (`cmake --build . --target kritatoolclonestamp`), 7/8 steps, no errors.
+  Also dropped `docs/context.md` (an unimplemented, superseded
+  `paintOverlay()`/native-paintop design note that never touched
+  `krita-src` and had drifted from this repo's actual direction) and the
+  empty, untracked `brush/` scaffold dir. Not yet manually verified in a
+  running Krita — see Verification plan below.
 
 ## Phase D plan: CS6 options-bar parity
 
