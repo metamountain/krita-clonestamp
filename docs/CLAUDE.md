@@ -100,11 +100,17 @@
   Also replaced the "Check for Updates" button's behavior (previously just
   opened the GitHub releases page) with a real check-and-install: new
   `clonestamp_update.py` reads `VERSION` out of `clonestamp_core.py` on the
-  `main` branch via `raw.githubusercontent.com` (no GitHub API/auth/git
-  needed), and if newer, downloads `clonestamp_core.py`/`clonestamp_docker.py`/
-  `__init__.py` into the running install (files fetched to memory first, only
-  written once all succeed, so a dropped connection can't half-update it).
-
+   `main` branch via `raw.githubusercontent.com` (no GitHub API/auth/git
+   needed), and if newer, downloads `clonestamp_core.py`/`clonestamp_docker.py`/
+   `__init__.py` into the running install (files fetched to memory first, only
+   written once all succeed, so a dropped connection can't half-update it).
+- **Python plugin: rebuild clonestamp.zip with current source (2026-07-18)**:
+   The shipped `python-plugin/clonestamp.zip` was stale at v1.1.0 (tracked in
+   `.gitignore`, never rebuilt during the v1.4.x/v1.5.x passes). Removed the
+   `.gitignore` entry, rebuilt the zip from the working tree (excluding
+   `__pycache__`), committed, and pushed to `origin/main`. The zip now contains
+   v1.5.8 source, ready for one-click plugin installation.
+ 
 ## Phase D plan: CS6 options-bar parity
 
 Reference: Photoshop CS6 Clone Stamp options bar (per user screenshot) and
