@@ -101,6 +101,11 @@ class ClonestampDocker(DockWidget):
         self._resize_active = False
         self._resize_start_global = None
         self._resize_start_size = None
+        # Also set on every Shift+drag start in _onCanvasPress; initialized
+        # here too so no code path can ever see them as missing attributes.
+        self._resize_start_hardness_pct = None
+        self._resize_accum_dx = 0
+        self._resize_accum_dy = 0
         self._timer = QTimer(self)
         self._timer.setInterval(30)
         self._timer.timeout.connect(self._onTimerTick)
@@ -775,6 +780,10 @@ class ClonestampDocker(DockWidget):
         elapses or brush size/hardness haven't changed; the previous frame
         is simply reused by the caller."""
         now = time.monotonic()
+        # 0.2s = the hover timer's own 200ms interval: that 5Hz cadence is
+        # the refresh cost this project has already run at without lag, so
+        # the cache reuses it as the refresh budget rather than inventing a
+        # new number.
         stale = (
             self._preview_cache_image is None
             or (now - self._preview_cache_time) >= 0.2
