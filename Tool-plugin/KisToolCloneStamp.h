@@ -84,7 +84,7 @@ private:
     QPointF m_lastDabPoint;
     bool m_hasLastDabPoint {false};
 
-    int m_brushSize {50};
+    int m_brushSize {250};
     qreal m_brushHardness {0.5};
     int m_brushOpacity {100};
 
@@ -93,7 +93,7 @@ private:
 
     bool m_isResizing {false};
     QPoint m_resizeStartWidgetPos;
-    int m_resizeStartSize {50};
+    int m_resizeStartSize {250};
     // Vertical component of the same Shift+drag gesture adjusts hardness
     // (drag up = harder, down = softer), mirroring Photoshop's on-canvas
     // brush resize where the two axes are independent.

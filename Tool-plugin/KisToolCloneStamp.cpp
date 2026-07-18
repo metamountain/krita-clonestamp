@@ -326,11 +326,18 @@ void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
         }
     }
 
-    gc.save();
-    gc.setPen(QPen(Qt::white, 1));
-    gc.setBrush(Qt::NoBrush);
-    gc.drawEllipse(viewRect);
-    gc.restore();
+    {
+        const QPointF dstCenter = viewRect.center();
+        const qreal dstCrossRadius = 6.0;
+
+        gc.save();
+        gc.setPen(QPen(Qt::white, 1));
+        gc.setBrush(Qt::NoBrush);
+        gc.drawEllipse(viewRect);
+        gc.drawLine(QPointF(dstCenter.x() - dstCrossRadius, dstCenter.y()), QPointF(dstCenter.x() + dstCrossRadius, dstCenter.y()));
+        gc.drawLine(QPointF(dstCenter.x(), dstCenter.y() - dstCrossRadius), QPointF(dstCenter.x(), dstCenter.y() + dstCrossRadius));
+        gc.restore();
+    }
 
     if (m_hasPreviewSource) {
         const QRectF srcPixelRect(m_previewSourcePoint.x() - half, m_previewSourcePoint.y() - half, half * 2, half * 2);
@@ -340,7 +347,7 @@ void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
         const qreal crossRadius = 6.0;
 
         gc.save();
-        gc.setPen(QPen(Qt::white, 1));
+        gc.setPen(QPen(QColor(255, 255, 255, 120), 1));
         gc.setBrush(Qt::NoBrush);
         gc.drawEllipse(srcViewRect);
         gc.drawLine(QPointF(center.x() - crossRadius, center.y()), QPointF(center.x() + crossRadius, center.y()));
