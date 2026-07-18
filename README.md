@@ -5,6 +5,8 @@ sample a source point, drag to paint a soft-edged copy of it elsewhere, with
 a live preview and proper single-step undo. Krita doesn't have this as a
 native tool today — this project adds it.
 
+![Demo](docs/preview.gif)
+
 ## Status and an honest disclosure
 
 This was built by **metamountain**, who is **not a programmer**, working
