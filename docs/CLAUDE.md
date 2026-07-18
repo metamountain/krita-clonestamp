@@ -42,6 +42,18 @@
   `QSignalBlocker`. See `toolchain-paths.md` for the implementation
   writeup. Rebuilt, reinstalled, launched — stays running. Not yet
   manually verified.
+- **Clone-brush parity pass (2026-07-18)**: brought both variants to a
+  shared "clone brush" behaviour. Default brush size is now **250 px**
+  (`m_brushSize`/`m_resizeStartSize` in `KisToolCloneStamp.h`; the Python
+  plugin already defaulted to 250). The hover overlay now draws a *synced
+  pair* of rings, each with a centre crosshair: the destination ring is
+  solid, the source ring is drawn paler (`QColor(255,255,255,120)`) so it
+  reads as the fainter of the two. In the Python plugin the same change
+  added a centre crosshair to the destination cursor ring and a pale ring
+  around the source marker, and removed the old always-on-top green
+  `SourceCrosshair` widget (it was buggy); the source marker now lives
+  entirely in the brush-cursor pixmap, driven by the renamed
+  `_hover_timer`/`_onHoverTick`. Native side not yet built/verified.
 
 ## Phase D plan: CS6 options-bar parity
 

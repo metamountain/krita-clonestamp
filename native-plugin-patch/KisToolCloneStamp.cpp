@@ -326,10 +326,16 @@ void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
         }
     }
 
+    const qreal crossRadius = 6.0;
+
+    // Destination ring + centre crosshair (drawn solid/opaque).
     gc.save();
     gc.setPen(QPen(Qt::white, 1));
     gc.setBrush(Qt::NoBrush);
     gc.drawEllipse(viewRect);
+    const QPointF dstCenter = viewRect.center();
+    gc.drawLine(QPointF(dstCenter.x() - crossRadius, dstCenter.y()), QPointF(dstCenter.x() + crossRadius, dstCenter.y()));
+    gc.drawLine(QPointF(dstCenter.x(), dstCenter.y() - crossRadius), QPointF(dstCenter.x(), dstCenter.y() + crossRadius));
     gc.restore();
 
     if (m_hasPreviewSource) {
@@ -337,10 +343,11 @@ void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
         const QRectF srcDocRect = image()->pixelToDocument(srcPixelRect);
         const QRectF srcViewRect = converter.documentToView(srcDocRect);
         const QPointF center = srcViewRect.center();
-        const qreal crossRadius = 6.0;
 
+        // Source ring + centre crosshair, drawn paler than the destination so
+        // the source reads as the fainter of the synced pair.
         gc.save();
-        gc.setPen(QPen(Qt::white, 1));
+        gc.setPen(QPen(QColor(255, 255, 255, 120), 1));
         gc.setBrush(Qt::NoBrush);
         gc.drawEllipse(srcViewRect);
         gc.drawLine(QPointF(center.x() - crossRadius, center.y()), QPointF(center.x() + crossRadius, center.y()));

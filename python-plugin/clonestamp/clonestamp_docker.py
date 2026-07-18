@@ -33,35 +33,6 @@ def _find_canvas_widget():
     return central.findChild(QOpenGLWidget)
 
 
-class SourceCrosshair(QWidget):
-    """Tiny transparent widget showing a green crosshair at the source point
-    on the canvas. Qt-only, no Krita API calls in paint path."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
-        self.resize(40, 40)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        c = self.rect().center()
-        r = 8
-        painter.setPen(QPen(QColor(255, 255, 255, 160), 3))
-        painter.drawLine(c.x() - r, c.y(), c.x() + r, c.y())
-        painter.drawLine(c.x(), c.y() - r, c.x(), c.y() + r)
-        painter.setPen(QPen(QColor(0, 220, 0, 230), 2))
-        painter.drawLine(c.x() - r, c.y(), c.x() + r, c.y())
-        painter.drawLine(c.x(), c.y() - r, c.x(), c.y() + r)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(0, 255, 0, 200))
-        painter.drawEllipse(c.x() - 2, c.y() - 2, 5, 5)
-        painter.end()
-
-
 class ClonestampDocker(DockWidget):
 
     def __init__(self):
@@ -76,13 +47,16 @@ class ClonestampDocker(DockWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(30)
         self._timer.timeout.connect(self._onTimerTick)
-        self._ch_timer = QTimer(self)
-        self._ch_timer.setInterval(200)
-        self._ch_timer.timeout.connect(self._onCrosshairTick)
+        # Refreshes the brush cursor's ghost preview + source ring at the live
+        # hover position while not painting. The eventFilter only sees
+        # press/release (not MouseMove), so polling the cursor here is what
+        # makes the source/destination pair track the pointer during hover.
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setInterval(200)
+        self._hover_timer.timeout.connect(self._onHoverTick)
         self._last_cursor_zoom = -1.0
         self._last_cursor_size = -1
         self._tick_counter = 0
-        self._crosshair = SourceCrosshair()
 
         # Cache for the live content-preview patch (see _updateBrushCursor).
         # Rebuilding it (image scale + soft-mask paint) on every 30ms drag
@@ -230,29 +204,6 @@ class ClonestampDocker(DockWidget):
             "Source: layer '{0}' @ ({1:.0f}, {2:.0f})".format(
                 core.STATE.source_node.name(), p.x(), p.y()))
 
-    # --- crosshair widget positioning --------------------------------------
-
-    def _positionCrosshair(self):
-        """Move the crosshair widget to the screen position of source_point.
-        Lightweight: calls zoomLevel/preferredCenter but no pixel I/O."""
-        if not core.STATE.has_point_source or self._canvas_widget is None:
-            self._crosshair.hide()
-            return
-        canvas = self._currentCanvas()
-        if canvas is None or not core.coordinate_mapping_reliable(canvas):
-            self._crosshair.hide()
-            return
-        zoom = canvas.zoomLevel()
-        pref = canvas.preferredCenter()
-        cw = self._canvas_widget.width()
-        ch = self._canvas_widget.height()
-        sx = (core.STATE.source_point.x() - pref.x()) * zoom + cw / 2.0
-        sy = (core.STATE.source_point.y() - pref.y()) * zoom + ch / 2.0
-        global_pos = self._canvas_widget.mapToGlobal(QPointF(sx, sy).toPoint())
-        self._crosshair.move(global_pos.x() - 20, global_pos.y() - 20)
-        if not self._crosshair.isVisible():
-            self._crosshair.show()
-
     # --- Enable/disable ---------------------------------------------------
 
     def onEnableToggled(self, checked):
@@ -277,13 +228,11 @@ class ClonestampDocker(DockWidget):
             self._last_cursor_zoom = canvas.zoomLevel()
         self._last_cursor_size = core.STATE.brush_size
         if core.STATE.has_point_source:
-            self._ch_timer.start()
-            self._positionCrosshair()
+            self._hover_timer.start()
         self.brushStatusLabel.setText("Clone Brush enabled.")
 
     def _disarm(self):
-        self._ch_timer.stop()
-        self._crosshair.hide()
+        self._hover_timer.stop()
         if self._canvas_widget is not None:
             QApplication.instance().removeEventFilter(self)
             self._canvas_widget.unsetCursor()
@@ -378,15 +327,13 @@ class ClonestampDocker(DockWidget):
                 core.sample_source_point(doc, core.STATE, doc_point)
                 self._describeLiveSource()
                 self.brushStatusLabel.setText("Source sampled.")
-                self._ch_timer.start()
-                self._positionCrosshair()
+                self._hover_timer.start()
                 self._updateBrushCursor()
             else:
                 core.begin_stroke(core.STATE, doc, doc_point)
                 self._stroke_active = True
                 self._tick_counter = 0
-                self._crosshair.hide()
-                self._ch_timer.stop()
+                self._hover_timer.stop()
                 self._timer.start()
                 self.brushStatusLabel.setText("Drag to paint...")
         except core.ClonestampError as e:
@@ -407,9 +354,8 @@ class ClonestampDocker(DockWidget):
                         "Stroke painted at ({0}, {1})".format(result.x(), result.y()))
             core.end_stroke(core.STATE)
             self._stroke_active = False
-            self._crosshair.show()
-            self._ch_timer.start()
-            self._positionCrosshair()
+            if core.STATE.has_point_source:
+                self._hover_timer.start()
         if self._resize_active:
             self._resize_active = False
             cursor_brush_status = (
@@ -433,9 +379,8 @@ class ClonestampDocker(DockWidget):
             return
         if not self._stroke_active:
             self._timer.stop()
-            self._crosshair.show()
-            self._ch_timer.start()
-            self._positionCrosshair()
+            if core.STATE.has_point_source:
+                self._hover_timer.start()
             return
 
         self._tick_counter += 1
@@ -471,11 +416,10 @@ class ClonestampDocker(DockWidget):
         elif zoom_changed or size_changed:
             self._updateBrushCursor()
 
-    def _onCrosshairTick(self):
-        self._positionCrosshair()
-        # Also refresh the cursor's content preview from the live hover
-        # position (5Hz -- cheap Qt-only image ops, no Krita API calls, same
-        # budget this project's history has shown to be safe).
+    def _onHoverTick(self):
+        # Refresh the cursor's content preview + source ring from the live
+        # hover position (5Hz -- cheap Qt-only image ops, no Krita API calls,
+        # same budget this project's history has shown to be safe).
         canvas = self._currentCanvas()
         if canvas is None or not core.coordinate_mapping_reliable(canvas):
             return
@@ -610,6 +554,16 @@ class ClonestampDocker(DockWidget):
             painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
             painter.drawEllipse(dl, dt, diameter, diameter)
 
+            # Destination centre crosshair -- gives the target ring a centre
+            # point that reads as a synced pair with the source marker below.
+            cs = 6
+            painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
+            painter.drawLine(half - cs, half + 1, half + cs, half + 1)
+            painter.drawLine(half + 1, half - cs, half + 1, half + cs)
+            painter.setPen(QPen(QColor(255, 255, 255, 220), 1))
+            painter.drawLine(half - cs, half, half + cs, half)
+            painter.drawLine(half, half - cs, half, half + cs)
+
             hardness_diameter = max(3, int(diameter * core.STATE.brush_hardness))
             inset = (diameter - hardness_diameter) // 2
             painter.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt.DashLine))
@@ -617,19 +571,24 @@ class ClonestampDocker(DockWidget):
             painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.DashLine))
             painter.drawEllipse(dl + inset, dt + inset, hardness_diameter, hardness_diameter)
 
-            # Red crosshair at source offset (follows cursor, shows what's cloned).
+            # Source ring + crosshair at the source offset (follows cursor,
+            # shows what's being cloned). Drawn deliberately paler than the
+            # destination ring above so the source reads as the fainter of the
+            # synced pair.
             if show_src:
                 sx = int(half + offset[0])
                 sy = int(half + offset[1])
+                # Pale source ring, same diameter as the destination ring.
+                painter.setBrush(Qt.NoBrush)
+                painter.setPen(QPen(QColor(0, 0, 0, 90), 1))
+                painter.drawEllipse(sx - diameter // 2 + 1, sy - diameter // 2 + 1, diameter, diameter)
+                painter.setPen(QPen(QColor(255, 255, 255, 110), 1))
+                painter.drawEllipse(sx - diameter // 2, sy - diameter // 2, diameter, diameter)
+                # Pale centre crosshair marking the source point.
                 cs = 6
-                painter.setPen(QPen(QColor(255, 0, 0, 220), 2))
+                painter.setPen(QPen(QColor(255, 0, 0, 140), 2))
                 painter.drawLine(sx - cs, sy, sx + cs, sy)
                 painter.drawLine(sx, sy - cs, sx, sy + cs)
-                painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
-                painter.drawLine(sx - cs, sy - 1, sx + cs, sy - 1)
-                painter.drawLine(sx - cs, sy + 1, sx + cs, sy + 1)
-                painter.drawLine(sx - 1, sy - cs, sx - 1, sy + cs)
-                painter.drawLine(sx + 1, sy - cs, sx + 1, sy + cs)
         except Exception as e:
             # A mid-paint exception here (e.g. from the preview patch/mask
             # work) would otherwise leave the painter still active on

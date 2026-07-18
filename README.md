@@ -46,7 +46,10 @@ exactly how this was put together, including the mistakes and dead ends.
    (Settings › Dockers), check **Enable Clone Brush**.
 4. Ctrl+click on the canvas to sample a source point, then click and drag
    to paint. Shift+drag resizes the brush (horizontal) and adjusts
-   hardness (vertical, drag up for harder edges, down for softer).
+   hardness (vertical, drag up for harder edges, down for softer). The
+   brush starts at 250 px. While hovering you see a synced pair of rings,
+   each with a centre crosshair: a solid one at the destination (under the
+   cursor) and a fainter one at the source point being cloned.
 
 This works against any reasonably recent existing Krita install — no
 custom build needed. (The `python-plugin/clonestamp/` folder in this repo
