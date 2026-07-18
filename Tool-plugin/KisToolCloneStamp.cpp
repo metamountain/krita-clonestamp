@@ -34,48 +34,48 @@
 namespace
 {
 
-QImage buildRadialMask(int w, int h, qreal hardness)
-{
-    QImage mask(w, h, QImage::Format_ARGB32);
-    mask.fill(Qt::transparent);
+// Ceiling on the per-stroke accumulator and the source snapshot (pixel
+// count) to bound worst-case memory use -- a Format_ARGB32_Premultiplied
+// buffer this size is 4 bytes/px, so this caps each around 800MB. Mirrors
+// MAX_ACCUMULATOR_PIXELS / MAX_SOURCE_SNAPSHOT_PIXELS in the Python
+// plugin's clonestamp_core.py; keep the two in sync.
+constexpr qint64 MAX_ACCUMULATOR_PIXELS = 200000000; // ~14000x14000
+constexpr qint64 MAX_SOURCE_SNAPSHOT_PIXELS = MAX_ACCUMULATOR_PIXELS;
 
-    QPainter painter(&mask);
+// White circle with the brush's soft falloff and opacity baked into its
+// alpha channel. One image serves as both the dab stamp (drawn into the
+// stroke accumulator with SourceOver) and the per-pixel mask for the
+// preview/composite paths (drawn with DestinationIn, which keeps the
+// destination's color but multiplies its alpha by this image's alpha).
+//
+// Gradient stops: solid from the center out to `hardness` (fraction of the
+// radius), then a smooth fade to fully transparent at the rim -- so
+// hardness 1.0 is a crisp-edged circle and hardness 0.0 fades from the
+// center outward. The 0.999 clamp keeps the middle stop strictly below the
+// final stop at 1.0: two stops at the same position would make the
+// solid-to-transparent order undefined.
+// Mirrors _build_soft_circle in clonestamp_core.py; keep the two in sync.
+QImage buildSoftCircle(int size, qreal hardness, int opacityPct)
+{
+    QImage img(size, size, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::transparent);
+
+    QPainter painter(&img);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(Qt::NoPen);
 
-    const qreal radius = qMin(w, h) / 2.0;
+    const qreal radius = size / 2.0;
     hardness = qBound(qreal(0.0), hardness, qreal(1.0));
+    const int alpha = qBound(0, qRound(255.0 * opacityPct / 100.0), 255);
 
-    QRadialGradient grad(w / 2.0, h / 2.0, qMax(radius, 0.5));
-    grad.setColorAt(0.0, QColor(255, 255, 255, 255));
-    grad.setColorAt(qMin(hardness, qreal(0.999)), QColor(255, 255, 255, 255));
+    QRadialGradient grad(size / 2.0, size / 2.0, qMax(radius, 0.5));
+    grad.setColorAt(0.0, QColor(255, 255, 255, alpha));
+    grad.setColorAt(qMin(hardness, qreal(0.999)), QColor(255, 255, 255, alpha));
     grad.setColorAt(1.0, QColor(255, 255, 255, 0));
     painter.setBrush(grad);
-    painter.drawEllipse(QRectF(0, 0, w, h));
+    painter.drawEllipse(QRectF(0, 0, size, size));
     painter.end();
-    return mask;
-}
-
-void applyRadialMask(QImage &image, qreal hardness)
-{
-    QImage mask = buildRadialMask(image.width(), image.height(), hardness);
-    QPainter painter(&image);
-    painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-    painter.drawImage(0, 0, mask);
-    painter.end();
-}
-
-void scaleAlpha(QImage &image, qreal factor)
-{
-    if (factor >= 1.0) {
-        return;
-    }
-    QImage overlay(image.size(), QImage::Format_ARGB32);
-    overlay.fill(QColor(0, 0, 0, qBound(0, int(255 * factor), 255)));
-    QPainter painter(&image);
-    painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-    painter.drawImage(0, 0, overlay);
-    painter.end();
+    return img;
 }
 
 } // namespace
@@ -97,14 +97,20 @@ void KisToolCloneStamp::activate(const QSet<KoShape *> &shapes)
 
 void KisToolCloneStamp::deactivate()
 {
+    if (m_isPainting) {
+        // A stroke was left open (e.g. tool switched mid-drag); flush the
+        // accumulated dabs so far rather than losing them silently.
+        finalizeStroke();
+    }
     if (m_transaction) {
-        // A stroke was left open (e.g. tool switched mid-drag); commit
-        // whatever was painted so far rather than losing it silently.
         m_transaction->commit(image()->undoAdapter());
         m_transaction.reset();
     }
     m_isPainting = false;
     m_isResizing = false;
+    m_accImage = QImage();
+    m_accBounds = QRect();
+    m_useAccumulator = false;
     KisTool::deactivate();
 }
 
@@ -149,6 +155,82 @@ void KisToolCloneStamp::sampleSource(const QPointF &docPoint)
     m_hasSource = true;
     m_hasStrokeOffset = false;
     m_hasLastDabPoint = false;
+    takeSourceSnapshot();
+}
+
+void KisToolCloneStamp::takeSourceSnapshot()
+{
+    // Freeze a copy of the source pixels at the moment they're sampled --
+    // see m_sourceSnapshot in the header for why. Taken once here with the
+    // sample scope current at Ctrl+click time; changing the scope combo
+    // afterwards deliberately does NOT retake it (same semantics as
+    // sample_source_point/_snapshot_source in clonestamp_core.py).
+    m_sourceSnapshot = QImage();
+    KisPaintDeviceSP srcDevice = sourceDeviceForSampling();
+    if (!srcDevice || !image()) {
+        return;
+    }
+    // The whole canvas rect, not the device's exact content bounds: every
+    // read/write in this tool is already clipped to canvas bounds, so this
+    // covers everything a stroke can touch.
+    const QRect bounds = image()->bounds();
+    const qint64 pixels = qint64(bounds.width()) * bounds.height();
+    if (bounds.isEmpty() || pixels > MAX_SOURCE_SNAPSHOT_PIXELS) {
+        // Too large to reasonably hold a whole extra copy of in memory;
+        // leave the snapshot null so reads fall back to the live device.
+        // That re-opens the smear-when-overlapping issue, but only on
+        // documents this big, and at least keeps the tool working.
+        return;
+    }
+
+    QByteArray bytes(bounds.width() * bounds.height() * static_cast<int>(srcDevice->pixelSize()), 0);
+    srcDevice->readBytes(reinterpret_cast<quint8 *>(bytes.data()),
+                         bounds.x(), bounds.y(), bounds.width(), bounds.height());
+    // Krita's 8-bit RGBA colorspace stores straight BGRA bytes in memory,
+    // matching QImage::Format_ARGB32 byte-for-byte on little-endian. The
+    // copy() detaches from `bytes`, which dies at end of scope.
+    m_sourceSnapshot = QImage(reinterpret_cast<const uchar *>(bytes.constData()),
+                              bounds.width(), bounds.height(), QImage::Format_ARGB32).copy();
+    m_snapshotLeft = bounds.x();
+    m_snapshotTop = bounds.y();
+}
+
+QImage KisToolCloneStamp::readSourceImage(const QRect &rect) const
+{
+    if (!m_sourceSnapshot.isNull()) {
+        // QImage::copy fills areas outside the snapshot with transparent
+        // black, which is exactly the out-of-bounds behavior we want.
+        const QImage slice = m_sourceSnapshot.copy(rect.translated(-m_snapshotLeft, -m_snapshotTop));
+        return slice.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    }
+
+    KisPaintDeviceSP srcDevice = sourceDeviceForSampling();
+    if (!srcDevice || rect.isEmpty()) {
+        return QImage();
+    }
+    QByteArray bytes(rect.width() * rect.height() * static_cast<int>(srcDevice->pixelSize()), 0);
+    srcDevice->readBytes(reinterpret_cast<quint8 *>(bytes.data()),
+                         rect.x(), rect.y(), rect.width(), rect.height());
+    const QImage wrapped(reinterpret_cast<const uchar *>(bytes.constData()),
+                         rect.width(), rect.height(), QImage::Format_ARGB32);
+    // convertToFormat always deep-copies here (formats differ), detaching
+    // from `bytes` before it goes out of scope.
+    return wrapped.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+}
+
+const QImage &KisToolCloneStamp::softCircle() const
+{
+    const int size = qMax(1, m_brushSize);
+    if (m_cachedCircle.isNull()
+        || m_cachedCircleSize != size
+        || m_cachedCircleHardness != m_brushHardness
+        || m_cachedCircleOpacity != m_brushOpacity) {
+        m_cachedCircle = buildSoftCircle(size, m_brushHardness, m_brushOpacity);
+        m_cachedCircleSize = size;
+        m_cachedCircleHardness = m_brushHardness;
+        m_cachedCircleOpacity = m_brushOpacity;
+    }
+    return m_cachedCircle;
 }
 
 void KisToolCloneStamp::beginStroke(const QPointF &docPoint)
@@ -168,6 +250,29 @@ void KisToolCloneStamp::beginStroke(const QPointF &docPoint)
     m_hasLastDabPoint = false;
     m_isPainting = true;
     m_transaction.reset(new KisTransaction(node->paintDevice()));
+
+    // Allocate the stroke accumulator (see m_accImage in the header). Where
+    // the Python plugin refuses the stroke outright on an oversized canvas
+    // (it can surface a user-facing error), a KisTool has no comparable
+    // channel -- so here we fall back to the old per-dab immediate
+    // compositing instead: degraded (opacity can build up past the ceiling
+    // where dabs overlap) but working, which beats a silently dead tool.
+    m_accBounds = QRect();
+    const QRect canvasBounds = image()->bounds();
+    const qint64 pixels = qint64(canvasBounds.width()) * canvasBounds.height();
+    m_useAccumulator = pixels > 0 && pixels <= MAX_ACCUMULATOR_PIXELS;
+    if (m_useAccumulator) {
+        m_accImage = QImage(canvasBounds.width(), canvasBounds.height(),
+                            QImage::Format_ARGB32_Premultiplied);
+        if (m_accImage.isNull()) {
+            // Allocation failure (out of memory) -- same fallback.
+            m_useAccumulator = false;
+        } else {
+            m_accImage.fill(Qt::transparent);
+            m_accLeft = canvasBounds.x();
+            m_accTop = canvasBounds.y();
+        }
+    }
 }
 
 void KisToolCloneStamp::stampDabAt(const QPointF &dstCenter)
@@ -175,17 +280,54 @@ void KisToolCloneStamp::stampDabAt(const QPointF &dstCenter)
     if (!m_isPainting || !m_hasSource) {
         return;
     }
+    if (m_useAccumulator) {
+        recordDabToAccumulator(dstCenter);
+    } else {
+        stampDabImmediate(dstCenter);
+    }
+}
 
+void KisToolCloneStamp::recordDabToAccumulator(const QPointF &dstCenter)
+{
+    // No paint-device access at all here -- a dab during a stroke is just a
+    // soft circle drawn into the in-memory accumulator; the actual clone
+    // (read source, mask, composite, write) happens once per stroke in
+    // finalizeStroke. Mirrors _paint_dab_to_accumulator in
+    // clonestamp_core.py.
+    const int size = qMax(1, m_brushSize);
+    const qreal half = size / 2.0;
+    const QRect dabRect(qRound(dstCenter.x() - half), qRound(dstCenter.y() - half), size, size);
+
+    m_accBounds = m_accBounds.isNull() ? dabRect : m_accBounds.united(dabRect);
+
+    const int localX = dabRect.x() - m_accLeft;
+    const int localY = dabRect.y() - m_accTop;
+    const QRect clip = QRect(localX, localY, size, size).intersected(m_accImage.rect());
+    if (clip.isEmpty()) {
+        return;
+    }
+
+    // The circle is always built at full brush size and only the clipped
+    // sub-rect of it is drawn, so the soft falloff stays centered on the
+    // true brush circle even when the dab is cut off by a canvas edge.
+    QPainter painter(&m_accImage);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    painter.drawImage(clip.topLeft(), softCircle(),
+                      QRect(clip.x() - localX, clip.y() - localY, clip.width(), clip.height()));
+    painter.end();
+}
+
+void KisToolCloneStamp::stampDabImmediate(const QPointF &dstCenter)
+{
+    // Fallback path for canvases too large for the accumulator (see
+    // beginStroke): read/mask/composite/write each dab directly. Overlapping
+    // dabs at partial opacity can build past the opacity ceiling here --
+    // known limitation of this path only.
     KisNodeSP dstNode = currentNode();
     if (!isValidPaintLayer(dstNode)) {
         return;
     }
-
-    KisPaintDeviceSP srcDevice = sourceDeviceForSampling();
     KisPaintDeviceSP dstDevice = dstNode->paintDevice();
-    if (!srcDevice) {
-        return;
-    }
 
     const QPointF srcCenter(dstCenter.x() + m_strokeOffset.x(), dstCenter.y() + m_strokeOffset.y());
 
@@ -212,26 +354,30 @@ void KisToolCloneStamp::stampDabAt(const QPointF &dstCenter)
         return; // entirely off one of the two areas; skip this dab
     }
 
-    const int srcX = srcRect.x() + left;
-    const int srcY = srcRect.y() + top;
     const int dstX = dstRect.x() + left;
     const int dstY = dstRect.y() + top;
 
-    QByteArray srcBytes(w * h * static_cast<int>(dstDevice->pixelSize()), 0);
+    QImage srcImage = readSourceImage(QRect(srcRect.x() + left, srcRect.y() + top, w, h));
+    if (srcImage.isNull()) {
+        return;
+    }
+
     QByteArray dstBytes(w * h * static_cast<int>(dstDevice->pixelSize()), 0);
-
-    srcDevice->readBytes(reinterpret_cast<quint8 *>(srcBytes.data()), srcX, srcY, w, h);
     dstDevice->readBytes(reinterpret_cast<quint8 *>(dstBytes.data()), dstX, dstY, w, h);
-
     // Krita's 8-bit RGBA colorspace stores straight BGRA bytes in memory,
     // matching QImage::Format_ARGB32 byte-for-byte on little-endian.
-    QImage srcImage(reinterpret_cast<const uchar *>(srcBytes.constData()), w, h, QImage::Format_ARGB32);
-    srcImage = srcImage.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     QImage dstImage(reinterpret_cast<const uchar *>(dstBytes.constData()), w, h, QImage::Format_ARGB32);
     dstImage = dstImage.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 
-    applyRadialMask(srcImage, m_brushHardness);
-    scaleAlpha(srcImage, m_brushOpacity / 100.0);
+    // Mask with the matching sub-rect of the FULL-size circle -- never a
+    // circle rebuilt at the clipped w x h, which would re-center the falloff
+    // on the clipped rectangle and make it visibly asymmetric near edges.
+    // DestinationIn keeps srcImage's colors but multiplies its alpha by the
+    // circle's alpha (falloff x opacity), i.e. per-pixel feathering.
+    QPainter maskPainter(&srcImage);
+    maskPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+    maskPainter.drawImage(QPoint(0, 0), softCircle(), QRect(left, top, w, h));
+    maskPainter.end();
 
     QPainter painter(&dstImage);
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -241,6 +387,105 @@ void KisToolCloneStamp::stampDabAt(const QPointF &dstCenter)
     const QImage resultImage = dstImage.convertToFormat(QImage::Format_ARGB32);
     dstDevice->writeBytes(resultImage.constBits(), dstX, dstY, w, h);
     dstDevice->setDirty(QRect(dstX, dstY, w, h));
+}
+
+void KisToolCloneStamp::finalizeStroke()
+{
+    // Composite the whole stroke in ONE pass: multiply the source by the
+    // accumulated stroke alpha, then SourceOver onto the destination. This
+    // is what keeps partial opacity honest -- however many dabs overlapped,
+    // the accumulator's alpha never exceeds the chosen opacity, so neither
+    // does the paint. Port of finalize_stroke in clonestamp_core.py.
+
+    // Detach the accumulator state up front so every exit path below leaves
+    // the tool clean (QImage is implicitly shared; this copy is cheap).
+    const QImage accImage = m_accImage;
+    const QRect accBounds = m_accBounds;
+    const bool useAcc = m_useAccumulator;
+    m_accImage = QImage();
+    m_accBounds = QRect();
+    m_useAccumulator = false;
+
+    if (!useAcc || accImage.isNull() || accBounds.isNull()) {
+        return; // immediate path already wrote everything, or no dabs landed
+    }
+    if (!image()) {
+        return;
+    }
+    KisNodeSP dstNode = currentNode();
+    if (!isValidPaintLayer(dstNode)) {
+        return;
+    }
+    KisPaintDeviceSP dstDevice = dstNode->paintDevice();
+
+    const QRect docBounds = image()->bounds();
+    const QRect maskRect = accBounds.intersected(docBounds);
+    if (maskRect.isEmpty()) {
+        return;
+    }
+
+    // Source position = destination + stroke offset.
+    const QRect srcFull = maskRect.translated(qRound(m_strokeOffset.x()), qRound(m_strokeOffset.y()));
+    const QRect dstFull = maskRect;
+
+    // Both sides clip against the canvas (reads outside a device's content
+    // return transparent anyway, and dabs were only ever recorded inside
+    // canvas bounds).
+    const QRect srcClip = srcFull.intersected(docBounds);
+    const QRect dstClip = dstFull.intersected(docBounds);
+    if (srcClip.isEmpty() || dstClip.isEmpty()) {
+        return;
+    }
+
+    // Shrink both rects by whichever side needs it more, so they stay the
+    // same size and pixel-aligned even when one side runs off the canvas.
+    const int left = qMax(srcClip.left() - srcFull.left(), dstClip.left() - dstFull.left());
+    const int top = qMax(srcClip.top() - srcFull.top(), dstClip.top() - dstFull.top());
+    const int right = qMax(srcFull.right() - srcClip.right(), dstFull.right() - dstClip.right());
+    const int bottom = qMax(srcFull.bottom() - srcClip.bottom(), dstFull.bottom() - dstClip.bottom());
+
+    const int w = maskRect.width() - left - right;
+    const int h = maskRect.height() - top - bottom;
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+
+    const QRect srcRect(srcFull.x() + left, srcFull.y() + top, w, h);
+    const QRect dstRect(dstFull.x() + left, dstFull.y() + top, w, h);
+
+    // Read source once -- from the frozen snapshot when available (see
+    // takeSourceSnapshot), else live.
+    QImage srcImage = readSourceImage(srcRect);
+    if (srcImage.isNull()) {
+        return;
+    }
+
+    // Read destination once.
+    QByteArray dstBytes(w * h * static_cast<int>(dstDevice->pixelSize()), 0);
+    dstDevice->readBytes(reinterpret_cast<quint8 *>(dstBytes.data()), dstRect.x(), dstRect.y(), w, h);
+    QImage dstImage(reinterpret_cast<const uchar *>(dstBytes.constData()), w, h, QImage::Format_ARGB32);
+    dstImage = dstImage.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+
+    // Slice the accumulator: m_accLeft/m_accTop is the accumulator origin
+    // (= canvas origin), not accBounds.
+    const QImage maskSlice = accImage.copy(dstRect.x() - m_accLeft, dstRect.y() - m_accTop, w, h);
+
+    // Step 1: multiply source by the stroke mask's alpha (DestinationIn
+    // keeps srcImage's colors, scales its alpha per-pixel by the mask's).
+    QPainter maskPainter(&srcImage);
+    maskPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+    maskPainter.drawImage(0, 0, maskSlice);
+    maskPainter.end();
+
+    // Step 2: composite masked source over destination (SourceOver).
+    QPainter painter(&dstImage);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    painter.drawImage(0, 0, srcImage);
+    painter.end();
+
+    const QImage resultImage = dstImage.convertToFormat(QImage::Format_ARGB32);
+    dstDevice->writeBytes(resultImage.constBits(), dstRect.x(), dstRect.y(), w, h);
+    dstDevice->setDirty(dstRect);
 }
 
 void KisToolCloneStamp::updateOutline(const QPointF &pixelPoint)
@@ -282,28 +527,59 @@ QImage KisToolCloneStamp::buildPreviewPatch(const QPointF &srcCenterPixels) cons
     if (!image()) {
         return QImage();
     }
-    KisPaintDeviceSP srcDevice = sourceDeviceForSampling();
-    if (!srcDevice) {
-        return QImage();
-    }
 
     const int size = qMax(1, m_brushSize);
     const qreal half = size / 2.0;
 
-    QRect srcRect(qRound(srcCenterPixels.x() - half), qRound(srcCenterPixels.y() - half), size, size);
+    const QRect srcRect(qRound(srcCenterPixels.x() - half), qRound(srcCenterPixels.y() - half), size, size);
     const QRect clip = srcRect.intersected(image()->bounds());
     if (clip.isEmpty()) {
         return QImage();
     }
 
-    QByteArray bytes(clip.width() * clip.height() * static_cast<int>(srcDevice->pixelSize()), 0);
-    srcDevice->readBytes(reinterpret_cast<quint8 *>(bytes.data()), clip.x(), clip.y(), clip.width(), clip.height());
+    QImage clipImage = readSourceImage(clip);
+    if (clipImage.isNull()) {
+        return QImage();
+    }
 
-    QImage srcImage(reinterpret_cast<const uchar *>(bytes.constData()), clip.width(), clip.height(), QImage::Format_ARGB32);
-    srcImage = srcImage.copy().convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    applyRadialMask(srcImage, m_brushHardness);
-    scaleAlpha(srcImage, m_brushOpacity / 100.0);
-    return srcImage;
+    // Compose at full brush size with the in-bounds content drawn at its
+    // offset, then mask with the full-size circle -- so the soft falloff
+    // stays centered on the true brush circle even when the source area is
+    // partly off-canvas (masking the clipped rect directly would re-center
+    // the falloff on the clipped rectangle).
+    QImage patch(size, size, QImage::Format_ARGB32_Premultiplied);
+    patch.fill(Qt::transparent);
+    QPainter painter(&patch);
+    painter.drawImage(clip.x() - srcRect.x(), clip.y() - srcRect.y(), clipImage);
+    painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+    painter.drawImage(0, 0, softCircle());
+    painter.end();
+    return patch;
+}
+
+QImage KisToolCloneStamp::cachedPreviewPatch(const QPointF &srcCenterPixels) const
+{
+    // paint() runs at Krita's repaint cadence; rebuilding the preview patch
+    // (device read + mask) every time is the expensive part, so refresh it
+    // at most every 200ms and reuse the last frame in between. The content
+    // can lag the cursor by up to that interval -- the same trade-off the
+    // Python docker's _refreshPreviewCache makes at the same ~5Hz budget.
+    // Brush parameter changes refresh immediately so the preview never
+    // shows a stale size/hardness/opacity.
+    const bool stale = m_previewCache.isNull()
+        || !m_previewCacheTimer.isValid()
+        || m_previewCacheTimer.elapsed() >= 200
+        || m_previewCacheSize != m_brushSize
+        || m_previewCacheHardness != m_brushHardness
+        || m_previewCacheOpacity != m_brushOpacity;
+    if (stale) {
+        m_previewCache = buildPreviewPatch(srcCenterPixels);
+        m_previewCacheTimer.start();
+        m_previewCacheSize = m_brushSize;
+        m_previewCacheHardness = m_brushHardness;
+        m_previewCacheOpacity = m_brushOpacity;
+    }
+    return m_previewCache;
 }
 
 void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
@@ -317,7 +593,7 @@ void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
     const QRectF viewRect = converter.documentToView(docRect);
 
     if (m_hasPreviewSource) {
-        const QImage preview = buildPreviewPatch(m_previewSourcePoint);
+        const QImage preview = cachedPreviewPatch(m_previewSourcePoint);
         if (!preview.isNull()) {
             gc.save();
             gc.setOpacity(0.6);
@@ -376,7 +652,11 @@ void KisToolCloneStamp::continuePrimaryAction(KoPointerEvent *event)
     }
 
     const QPointF pixelPoint = convertToPixelCoord(event);
-    const qreal minSpacing = 2.0;
+    // Dab spacing scales with brush size: overlapping soft circles union to
+    // a smooth mask, so at 15% of the diameter (well under Photoshop's 25%
+    // default brush spacing) no scalloping is visible, while a 250px brush
+    // stamps ~19x fewer dabs than the old fixed 2px spacing did.
+    const qreal minSpacing = qMax(qreal(2.0), m_brushSize * qreal(0.15));
     if (m_hasLastDabPoint) {
         const qreal dx = pixelPoint.x() - m_lastDabPoint.x();
         const qreal dy = pixelPoint.y() - m_lastDabPoint.y();
@@ -398,6 +678,7 @@ void KisToolCloneStamp::endPrimaryAction(KoPointerEvent *event)
     if (m_isPainting) {
         m_isPainting = false;
         m_hasLastDabPoint = false;
+        finalizeStroke();
         if (m_transaction) {
             m_transaction->commit(image()->undoAdapter());
             m_transaction.reset();
@@ -539,6 +820,8 @@ QWidget *KisToolCloneStamp::createOptionWidget()
     sampleCombo->setCurrentIndex(m_sampleScope == SampleScope::AllLayers ? 1 : 0);
     connect(sampleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
         m_sampleScope = (index == 1) ? SampleScope::AllLayers : SampleScope::CurrentLayer;
+        // Deliberately does not retake the source snapshot -- the scope is
+        // captured at Ctrl+click time, same as the Python plugin.
     });
     sampleRow->addWidget(sampleCombo);
     layout->addLayout(sampleRow);

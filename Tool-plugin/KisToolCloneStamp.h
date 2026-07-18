@@ -14,6 +14,9 @@
 #include <klocalizedstring.h>
 #include <QPointF>
 #include <QPoint>
+#include <QRect>
+#include <QImage>
+#include <QElapsedTimer>
 #include <QScopedPointer>
 
 class KisTransaction;
@@ -57,10 +60,23 @@ private:
 
     bool isValidPaintLayer(KisNodeSP node) const;
     void sampleSource(const QPointF &pixelPoint);
+    void takeSourceSnapshot();
     void beginStroke(const QPointF &pixelPoint);
     void stampDabAt(const QPointF &dstCenterPixels);
+    void recordDabToAccumulator(const QPointF &dstCenterPixels);
+    void stampDabImmediate(const QPointF &dstCenterPixels);
+    void finalizeStroke();
+    // Reads rect from the frozen source snapshot when one exists, else a live
+    // read from sourceDeviceForSampling(); returns a premultiplied QImage
+    // (out-of-range areas transparent), or a null image if no source is
+    // readable at all.
+    QImage readSourceImage(const QRect &rect) const;
+    // Cached full-size soft brush circle (hardness falloff + opacity baked
+    // into the alpha) -- treat the returned image as read-only.
+    const QImage &softCircle() const;
     void updateOutline(const QPointF &pixelPoint);
     QImage buildPreviewPatch(const QPointF &srcCenterPixels) const;
+    QImage cachedPreviewPatch(const QPointF &srcCenterPixels) const;
     // Current Layer reads m_sourceNode's own device (the layer active at
     // Ctrl+click time); All Layers reads the image's merged projection --
     // Current & Below is deferred, it needs partial layer-stack compositing.
@@ -73,6 +89,47 @@ private:
     KisNodeSP m_sourceNode;
     QPointF m_sourcePoint;
     bool m_hasSource {false};
+
+    // Frozen copy of the source pixels, taken once at Ctrl+click time (see
+    // takeSourceSnapshot) -- reads go through this instead of the live layer
+    // so that painting over pixels the source point has already passed over
+    // doesn't clone already-modified content back onto itself. Mirrors
+    // ClonestampState._source_snapshot in the Python plugin's
+    // clonestamp_core.py. Null when the canvas was too large to snapshot
+    // (live-read fallback).
+    QImage m_sourceSnapshot;
+    int m_snapshotLeft {0};
+    int m_snapshotTop {0};
+
+    // In-memory alpha accumulator for the current stroke. Dabs record a soft
+    // white circle here instead of touching the paint device each time; at
+    // stroke end the accumulated mask is composited onto the destination in a
+    // single pass (finalizeStroke), so overlapping dabs can never build past
+    // the chosen opacity. Mirrors _acc_image and friends in clonestamp_core.py.
+    QImage m_accImage;
+    int m_accLeft {0};
+    int m_accTop {0};
+    QRect m_accBounds; // union of all dab rects this stroke; null = no dabs yet
+    // False when the canvas exceeded MAX_ACCUMULATOR_PIXELS at beginStroke;
+    // dabs then fall back to the old per-dab immediate compositing.
+    bool m_useAccumulator {false};
+
+    // Single-entry cache for the soft brush circle (see softCircle()) --
+    // rebuilding the radial gradient on every dab of a stroke was pure waste
+    // since size/hardness/opacity almost never change mid-stroke.
+    mutable QImage m_cachedCircle;
+    mutable int m_cachedCircleSize {-1};
+    mutable qreal m_cachedCircleHardness {-1.0};
+    mutable int m_cachedCircleOpacity {-1};
+
+    // Throttle cache for the on-canvas content preview (see
+    // cachedPreviewPatch) -- same ~5Hz budget the Python docker's
+    // _refreshPreviewCache already proved out.
+    mutable QImage m_previewCache;
+    mutable QElapsedTimer m_previewCacheTimer;
+    mutable int m_previewCacheSize {-1};
+    mutable qreal m_previewCacheHardness {-1.0};
+    mutable int m_previewCacheOpacity {-1};
 
     // Aligned (GIMP/Photoshop semantics): the source-to-destination offset is
     // fixed after the first stroke and reused by every later stroke; when
