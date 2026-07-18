@@ -104,12 +104,14 @@
    needed), and if newer, downloads `clonestamp_core.py`/`clonestamp_docker.py`/
    `__init__.py` into the running install (files fetched to memory first, only
    written once all succeed, so a dropped connection can't half-update it).
-- **Python plugin: rebuild clonestamp.zip with current source (2026-07-18)**:
-   The shipped `python-plugin/clonestamp.zip` was stale at v1.1.0 (tracked in
-   `.gitignore`, never rebuilt during the v1.4.x/v1.5.x passes). Removed the
-   `.gitignore` entry, rebuilt the zip from the working tree (excluding
-   `__pycache__`), committed, and pushed to `origin/main`. The zip now contains
-   v1.5.8 source, ready for one-click plugin installation.
+- **Rule: rebuild clonestamp.zip before every push** (`python-plugin/clonestamp.zip`):
+   The zip is the distribution artifact for one-click plugin installation (users
+   download it from GitHub and install via Krita's "Install from File"). It must
+   be rebuilt from the working tree (excluding `__pycache__`) before every push,
+   so the repo always ships a zip that matches the current source. Keep the zip
+   *tracked* in git (not in `.gitignore`) so it gets included in every push.
+   Rebuild command: delete `python-plugin/clonestamp.zip`, then zip the contents
+   of `python-plugin/clonestamp/` (excluding `__pycache__`) into it.
  
 ## Phase D plan: CS6 options-bar parity
 
