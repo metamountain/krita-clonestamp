@@ -329,13 +329,19 @@ class ClonestampDocker(DockWidget):
         layout = QVBoxLayout()
 
         self.enableCheck = QCheckBox("Enable Clone Brush")
+        self.enableCheck.setToolTip(
+            "Turns the Clone Brush on: canvas clicks are captured by this "
+            "plugin while enabled (the active Krita tool won't also paint). "
+            "Automatically disabled when you switch documents.")
         self.enableCheck.toggled.connect(self.onEnableToggled)
         layout.addWidget(self.enableCheck)
 
         hint = QLabel(
             "Ctrl+Click on canvas = sample source. Click+drag = paint. "
-            "Shift+drag = resize brush. Clicks are consumed while enabled, "
-            "so the active Krita tool won't also paint on the same drag.")
+            "Shift+drag = adjust brush: horizontal = size, "
+            "vertical = softness (drag up = harder, down = softer). "
+            "Clicks are consumed while enabled, so the active Krita tool "
+            "won't also paint on the same drag.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
@@ -349,21 +355,30 @@ class ClonestampDocker(DockWidget):
         self.sizeSpin.setRange(1, 2000)
         self.sizeSpin.setValue(core.STATE.brush_size)
         self.sizeSpin.setSuffix(" px")
+        self.sizeSpin.setToolTip(
+            "Brush diameter in pixels.\n"
+            "On canvas: Shift+drag horizontally (right = larger).")
         self.sizeSpin.valueChanged.connect(self._onSizeChanged)
         sizeRow.addWidget(self.sizeSpin)
         layout.addLayout(sizeRow)
 
+        hardness_tip = (
+            "Edge softness: 100% = crisp hard edge, 0% = fades from the "
+            "center outward.\n"
+            "On canvas: Shift+drag vertically (up = harder, down = softer).")
         hardnessRow = QHBoxLayout()
         hardnessRow.addWidget(QLabel("Hardness:"))
         self.hardnessSlider = QSlider(Qt.Horizontal)
         self.hardnessSlider.setRange(0, 100)
         self.hardnessSlider.setValue(int(core.STATE.brush_hardness * 100))
+        self.hardnessSlider.setToolTip(hardness_tip)
         self.hardnessSlider.valueChanged.connect(self._onHardnessChanged)
         hardnessRow.addWidget(self.hardnessSlider)
         self.hardnessSpin = QSpinBox()
         self.hardnessSpin.setRange(0, 100)
         self.hardnessSpin.setValue(int(core.STATE.brush_hardness * 100))
         self.hardnessSpin.setSuffix(" %")
+        self.hardnessSpin.setToolTip(hardness_tip)
         self.hardnessSpin.valueChanged.connect(self._onHardnessChanged)
         hardnessRow.addWidget(self.hardnessSpin)
         layout.addLayout(hardnessRow)
@@ -374,11 +389,21 @@ class ClonestampDocker(DockWidget):
         self.brushOpacitySpin.setRange(0, 100)
         self.brushOpacitySpin.setValue(core.STATE.brush_opacity)
         self.brushOpacitySpin.setSuffix(" %")
+        self.brushOpacitySpin.setToolTip(
+            "Maximum coverage of one stroke -- overlapping dabs within a "
+            "single stroke never build past this. Separate strokes over "
+            "the same area do add up.")
         self.brushOpacitySpin.valueChanged.connect(self._onBrushOpacityChanged)
         brushOpacityRow.addWidget(self.brushOpacitySpin)
         layout.addLayout(brushOpacityRow)
 
         self.alignedCheck = QCheckBox("Aligned")
+        self.alignedCheck.setToolTip(
+            "Checked: the source moves with your strokes -- the offset "
+            "fixed by the first stroke is kept for all later strokes "
+            "(Photoshop-style).\n"
+            "Unchecked: every new stroke starts cloning from the original "
+            "sampled point again.")
         self.alignedCheck.setChecked(core.STATE.aligned)
         self.alignedCheck.toggled.connect(self._onAlignedToggled)
         layout.addWidget(self.alignedCheck)
@@ -389,6 +414,10 @@ class ClonestampDocker(DockWidget):
         # machine it can be switched off entirely -- painting keeps working,
         # with a plain crosshair marking the paint position instead.
         self.cursorOutlineCheck = QCheckBox("Brush cursor outline")
+        self.cursorOutlineCheck.setToolTip(
+            "Shows the ring cursor with the source ghost preview. Switch "
+            "off if the cursor misbehaves on your system -- painting keeps "
+            "working, with a plain crosshair marking the paint position.")
         self.cursorOutlineCheck.setChecked(True)
         self.cursorOutlineCheck.toggled.connect(self._onCursorOutlineToggled)
         layout.addWidget(self.cursorOutlineCheck)
@@ -399,6 +428,10 @@ class ClonestampDocker(DockWidget):
         self.sampleCombo.addItem("Current Layer")
         self.sampleCombo.addItem("All Layers")
         self.sampleCombo.setCurrentIndex(1 if core.STATE.sample_scope == "all" else 0)
+        self.sampleCombo.setToolTip(
+            "What Ctrl+click reads from: only the active layer, or the "
+            "whole image as you see it (all layers merged). Takes effect "
+            "at the next Ctrl+click.")
         self.sampleCombo.currentIndexChanged.connect(self._onSampleScopeChanged)
         sampleRow.addWidget(self.sampleCombo)
         layout.addLayout(sampleRow)
@@ -415,6 +448,9 @@ class ClonestampDocker(DockWidget):
         aboutRow.addWidget(githubLabel)
         aboutRow.addStretch()
         updateButton = QPushButton("Check for Updates")
+        updateButton.setToolTip(
+            "Checks GitHub for a newer version and installs it in place. "
+            "Restart Krita afterwards to load it.")
         updateButton.clicked.connect(self._onCheckForUpdates)
         aboutRow.addWidget(updateButton)
         layout.addLayout(aboutRow)
