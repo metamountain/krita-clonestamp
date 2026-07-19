@@ -254,6 +254,33 @@ hardness slider tracks Shift+drag.
 
 ---
 
+# Follow-up — 2026-07-19 (v1.0.2): remaining paint-drag flicker
+
+User report: still slight flicker while painting. Root cause: during a
+stroke the only thing changing in the cursor pixmap is the ghost preview
+content, refreshed at ~5Hz — so the signature cache still allowed five
+native `setCursor()` swaps per second, each a chance for the OS cursor to
+blink.
+
+Fix 1: **the cursor pixmap is frozen for the whole stroke** (zero
+setCursor calls mid-drag; the OS moves the frozen pixmap natively). The
+ghost is redundant while painting anyway — the stroke overlay draws the
+real result at that exact spot. Zoom/brush-size changes still rebuild.
+
+Fix 2 (user's suggestion, applied to hovering): **adaptive refresh rate
+by brush size** — ghost refresh drops from 5Hz to 2.5Hz when the
+on-screen brush diameter exceeds 256px, since patch scaling, pixmap
+rebuild, and cursor swap all scale with brush size.
+
+**Test:** paint slow/fast strokes with a source armed — the ring cursor
+must not blink at all during a drag; the ghost under the cursor stays
+static mid-stroke (expected — the overlay shows the live result) and
+resumes updating on release. Hover with a huge brush (500px+ at 100%
+zoom): ghost updates are slightly slower; ring stays glued to the
+pointer.
+
+---
+
 ## Suggested test order for the local session
 
 1. Python plugin first (drop-in, no build): smoke-test sample/paint/undo,
