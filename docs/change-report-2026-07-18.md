@@ -157,6 +157,23 @@ documented future optimization. A docstring now records this trade-off.
   the 0.2s preview-cache interval rationale, and (C++) the gradient-stop
   math and `DestinationIn` masking trick.
 
+## Python — new "Brush cursor outline" toggle (v1.6.0)
+
+Added after hands-on testing reported the ring/ghost-preview cursor still
+misbehaving on the tester's machine. The docker now has a **Brush cursor
+outline** checkbox (default on, below "Aligned"). Unchecking it skips all
+custom-cursor pixmap work in `_updateBrushCursor` and shows a plain
+crosshair instead — painting, sampling, and resize all keep working. This
+is an escape hatch, not a fix: if the outline glitch is reproducible,
+please note the symptoms (wrong position? flicker? stuck? truncated at
+large source offsets? — the pixmap is clamped to 512px, which cuts off the
+source ring when the sample point is far from the cursor) so the root
+cause can be chased properly.
+
+**Test:** arm the brush, toggle the checkbox both ways while hovering,
+during a drag, and during a Shift+drag resize. Off = plain crosshair, on =
+ring returns immediately; no stuck or invisible cursor in either state.
+
 ---
 
 ## Suggested test order for the local session

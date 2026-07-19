@@ -186,6 +186,16 @@ class ClonestampDocker(DockWidget):
         self.alignedCheck.toggled.connect(self._onAlignedToggled)
         layout.addWidget(self.alignedCheck)
 
+        # Escape hatch for the ring/ghost-preview cursor: it's the most
+        # platform-sensitive part of this plugin (QCursor pixmap size
+        # limits, per-tick pixmap rebuilds), so if it misbehaves on a given
+        # machine it can be switched off entirely -- painting keeps working,
+        # with a plain crosshair marking the paint position instead.
+        self.cursorOutlineCheck = QCheckBox("Brush cursor outline")
+        self.cursorOutlineCheck.setChecked(True)
+        self.cursorOutlineCheck.toggled.connect(self._onCursorOutlineToggled)
+        layout.addWidget(self.cursorOutlineCheck)
+
         sampleRow = QHBoxLayout()
         sampleRow.addWidget(QLabel("Sample:"))
         self.sampleCombo = QComboBox()
@@ -268,6 +278,14 @@ class ClonestampDocker(DockWidget):
 
     def _onAlignedToggled(self, checked):
         core.STATE.aligned = checked
+
+    def _onCursorOutlineToggled(self, checked):
+        # _updateBrushCursor itself branches on the checkbox, so one call
+        # applies the new state immediately in both directions (ring back
+        # on, or replaced by the plain crosshair).
+        if self._canvas_widget is None:
+            return
+        self._updateBrushCursor()
 
     def _onSampleScopeChanged(self, index):
         core.STATE.sample_scope = "all" if index == 1 else "current"
@@ -651,6 +669,15 @@ class ClonestampDocker(DockWidget):
         When cursor_doc_pos is given and a source is sampled, also draws a
         crosshair + source outline ring at the relative offset."""
         if self._canvas_widget is None:
+            return
+        if not self.cursorOutlineCheck.isChecked():
+            # Outline switched off: skip all pixmap work and keep a plain
+            # crosshair so the paint position stays visible (Krita's native
+            # brush outline is suppressed while the brush is armed, so no
+            # cursor at all would leave the user pointing blind). Setting
+            # the same shape cursor repeatedly is cheap, so callers don't
+            # need to special-case this.
+            self._canvas_widget.setCursor(QCursor(Qt.CrossCursor))
             return
         canvas = self._currentCanvas()
         zoom = canvas.zoomLevel() if canvas else 1.0
