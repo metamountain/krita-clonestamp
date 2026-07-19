@@ -79,7 +79,7 @@ SUPPORTED_COLOR_DEPTH = "U8"
 # NOTE: installs still on a pre-restart version (>= 1.5) will NOT be
 # offered this as an update (the updater only upgrades to a numerically
 # newer version); they need one manual zip re-import.
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
 
 # Krita's default 8-bit RGBA layers store pixels as straight (non-premultiplied)

@@ -924,10 +924,18 @@ class ClonestampDocker(DockWidget):
         if zoom_changed or size_changed:
             self._last_cursor_zoom = zoom
             self._last_cursor_size = core.STATE.brush_size
-        if core.STATE.has_point_source:
+        # The cursor pixmap is frozen for the whole stroke: the source
+        # offset is fixed at begin_stroke, so the ring/crosshair layout
+        # can't change mid-drag, and the ghost preview is redundant while
+        # the stroke overlay is painting the real result at exactly the
+        # spot the ghost would show. Refreshing it here anyway meant a
+        # native setCursor() swap on every ~5Hz preview-cache tick, and
+        # each swap is a chance for the OS cursor to visibly blink -- the
+        # last remaining flicker source while painting. The frozen pixmap
+        # still tracks the pointer natively (the OS moves it); only a
+        # zoom or brush-size change forces a rebuild.
+        if zoom_changed or size_changed:
             self._updateBrushCursor(doc_point)
-        elif zoom_changed or size_changed:
-            self._updateBrushCursor()
 
     def _onHoverTick(self):
         # Refresh the cursor pixmap's ghost-preview content from the live
@@ -1223,13 +1231,18 @@ class ClonestampDocker(DockWidget):
         elapses or brush size/hardness haven't changed; the previous frame
         is simply reused by the caller."""
         now = time.monotonic()
-        # 0.2s = the hover timer's own 200ms interval: that 5Hz cadence is
-        # the refresh cost this project has already run at without lag, so
-        # the cache reuses it as the refresh budget rather than inventing a
-        # new number.
+        # Adaptive refresh rate by brush size: everything a refresh
+        # triggers -- the scaled+masked patch here, the cursor pixmap
+        # rebuild, and the native cursor swap -- scales with the brush's
+        # on-screen size, so large brushes refresh their ghost content at
+        # half the rate. 0.2s (the hover timer's own 200ms/5Hz cadence)
+        # is the budget this project has already validated for the small
+        # case; the ring/crosshair always stay at full responsiveness
+        # since they ride the OS cursor, not this cache.
+        refresh_interval = 0.2 if diameter <= 256 else 0.4
         stale = (
             self._preview_cache_image is None
-            or (now - self._preview_cache_time) >= 0.2
+            or (now - self._preview_cache_time) >= refresh_interval
             or self._preview_cache_diameter != diameter
             or self._preview_cache_hardness != core.STATE.brush_hardness
         )
