@@ -103,6 +103,28 @@ because Qt/sip objects can already be deleted when callbacks fire.
   if one exists, it must match `main` or be deleted. Version numbering
   was restarted at **1.0** on 2026-07-19 — the 1.x.y prototype history up
   to 1.7.1 predates the restart (see the change report).
+- **Real toolbox icon for `Tool-plugin/` via a Python-installer wrapper**
+  (investigated 2026-07-19, studying `Acly/krita-ai-tools`'s distribution
+  model — not yet designed or implemented): that project ships a real
+  native `KisTool` as a per-platform, per-Krita-version release zip
+  (`krita_vision_tools-windows-x64-3.0.0.zip`, "Built for Krita 6.0.2.1
+  official release"), installed through the ordinary **Import Python
+  Plugin from File** dialog. Best-evidence reconstruction (release asset
+  names + README install steps + the mandatory restart after import;
+  not byte-verified against the actual zip, which this environment's
+  network scope couldn't fetch): the zip bundles a tiny Python
+  "installer" plugin (`__init__.py` + `.desktop`) alongside the
+  precompiled native plugin files; on first load the installer copies
+  the native `.dll`/`.so` + its JSON metadata into Krita's own
+  `lib/kritaplugins/` folder, and the *next* restart's normal native-
+  plugin scan picks it up and registers the real toolbox icon — no
+  ABI magic, just moving the "build once" step from the end user (today's
+  `Tool-plugin/NOTE.md` requirement) to whoever packages each release.
+  Would need, if pursued: a packaging script wrapping the
+  `C:\dev\krita-src` build output into such an installer zip, a copy-into-
+  place mechanism with permission/failure handling, and a maintained
+  per-Krita-version compatibility list (mirroring how Acly's README tells
+  users which release matches their installed Krita version).
 
 ## History and deeper references
 
