@@ -21,6 +21,7 @@
 
 class KisTransaction;
 class QSpinBox;
+class QSlider;
 
 class KisToolCloneStamp : public KisTool
 {
@@ -160,6 +161,7 @@ private:
     // back into the on-screen option widget, not just the internal state.
     QSpinBox *m_sizeSpin {nullptr};
     QSpinBox *m_hardnessSpin {nullptr};
+    QSlider *m_hardnessSlider {nullptr};
 
     QPointF m_hoverPoint;
     bool m_hasHoverPoint {false};
