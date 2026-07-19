@@ -788,6 +788,8 @@ QWidget *KisToolCloneStamp::createOptionWidget()
     QSpinBox *sizeSpin = new QSpinBox();
     sizeSpin->setRange(1, 2000);
     sizeSpin->setSuffix(i18n(" px"));
+    sizeSpin->setToolTip(i18n("Brush diameter in pixels.\n"
+                              "On canvas: Shift+drag horizontally (right = larger)."));
     sizeSpin->setValue(m_brushSize);
     connect(sizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
         m_brushSize = value;
@@ -799,13 +801,18 @@ QWidget *KisToolCloneStamp::createOptionWidget()
     QHBoxLayout *hardnessRow = new QHBoxLayout();
     hardnessRow->addWidget(new QLabel(i18n("Hardness:")));
     // Slider + spinbox pair, same as the Python docker's hardness row.
+    const QString hardnessTip = i18n(
+        "Edge softness: 100% = crisp hard edge, 0% = fades from the center outward.\n"
+        "On canvas: Shift+drag vertically (up = harder, down = softer).");
     QSlider *hardnessSlider = new QSlider(Qt::Horizontal);
     hardnessSlider->setRange(0, 100);
     hardnessSlider->setValue(qRound(m_brushHardness * 100));
+    hardnessSlider->setToolTip(hardnessTip);
     hardnessRow->addWidget(hardnessSlider);
     QSpinBox *hardnessSpin = new QSpinBox();
     hardnessSpin->setRange(0, 100);
     hardnessSpin->setSuffix(i18n(" %"));
+    hardnessSpin->setToolTip(hardnessTip);
     hardnessSpin->setValue(qRound(m_brushHardness * 100));
     connect(hardnessSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this, hardnessSlider](int value) {
         m_brushHardness = value / 100.0;
@@ -827,6 +834,9 @@ QWidget *KisToolCloneStamp::createOptionWidget()
     QSpinBox *opacitySpin = new QSpinBox();
     opacitySpin->setRange(0, 100);
     opacitySpin->setSuffix(i18n(" %"));
+    opacitySpin->setToolTip(i18n("Maximum coverage of one stroke -- overlapping dabs "
+                                 "within a single stroke never build past this. "
+                                 "Separate strokes over the same area do add up."));
     opacitySpin->setValue(m_brushOpacity);
     connect(opacitySpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
         m_brushOpacity = value;
@@ -835,6 +845,11 @@ QWidget *KisToolCloneStamp::createOptionWidget()
     layout->addLayout(opacityRow);
 
     QCheckBox *alignedCheck = new QCheckBox(i18n("Aligned"));
+    alignedCheck->setToolTip(i18n("Checked: the source moves with your strokes -- the "
+                                  "offset fixed by the first stroke is kept for all "
+                                  "later strokes (Photoshop-style).\n"
+                                  "Unchecked: every new stroke starts cloning from the "
+                                  "original sampled point again."));
     alignedCheck->setChecked(m_aligned);
     connect(alignedCheck, &QCheckBox::toggled, this, [this](bool checked) {
         m_aligned = checked;
@@ -849,6 +864,9 @@ QWidget *KisToolCloneStamp::createOptionWidget()
     QHBoxLayout *sampleRow = new QHBoxLayout();
     sampleRow->addWidget(new QLabel(i18n("Sample:")));
     QComboBox *sampleCombo = new QComboBox();
+    sampleCombo->setToolTip(i18n("What Ctrl+click reads from: only the active layer, "
+                                 "or the whole image as you see it (all layers "
+                                 "merged). Takes effect at the next Ctrl+click."));
     sampleCombo->addItem(i18n("Current Layer"));
     sampleCombo->addItem(i18n("All Layers"));
     sampleCombo->setCurrentIndex(m_sampleScope == SampleScope::AllLayers ? 1 : 0);
