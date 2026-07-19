@@ -176,7 +176,16 @@ ring returns immediately; no stuck or invisible cursor in either state.
 
 ---
 
-# Follow-up pass — 2026-07-19 (v1.7.0)
+# Follow-up pass — 2026-07-19 (v1.7.0, merged with main's v1.5.8 → v1.7.1)
+
+> **Merge note:** the local session independently pushed v1.4.8–v1.5.8 to
+> `main` (MDI-aware canvas finder, document-switch watcher + `clear_source`,
+> blank-cursor resize fix, MouseMove swallowing, cursor-refresh coalescing,
+> zip artifact). This branch now contains BOTH lines. Where they solved the
+> same problem differently, the hands-on-validated `main` fix won: resize
+> uses `Qt.BlankCursor` + warp (not my 10ms leash, which was dropped); my
+> overlay resize ring and cursor signature cache are layered on top.
+> Combined version: **1.7.1**.
 
 Driven by hands-on feedback: "Python plugin flickers a bit during
 mouse-drag brush resize, otherwise all good." Local Krita source build

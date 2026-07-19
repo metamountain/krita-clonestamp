@@ -3,7 +3,43 @@
 """Pure logic for the Clone Stamp plugin: capture, feather/opacity blend, write-back.
 
 No Qt-widget code lives here so it can be exercised/reasoned about independently
-of the docker and extension UI.
+of the docker and extension UI (see clonestamp_docker.py for that half, and
+its own module docstring for the full feature map of how the two fit
+together).
+
+Feature map for this file specifically:
+
+- **Coordinate mapping** (`map_widget_to_document`/`map_document_to_widget`):
+  screen-pixel <-> document-pixel conversion, accounting for zoom and pan
+  (`canvas.preferredCenter()`). `coordinate_mapping_reliable` refuses this
+  when the canvas is rotated or mirrored, since the plugin has no way to
+  account for that and would otherwise paint in the wrong place silently.
+
+- **Sampling** (`sample_source_point`, `_snapshot_source`): Ctrl+click
+  records the source point *and* freezes a copy of the source pixels at
+  that instant (`ClonestampState._source_snapshot`). Painting always reads
+  from that frozen copy, not the live layer -- otherwise, once a stroke's
+  path crosses ground it already painted over earlier in the same session,
+  it would clone its own just-painted pixels back onto itself instead of
+  the original content, which is not how a real clone stamp tool behaves.
+
+- **Stroke lifecycle** (`begin_stroke`/`continue_stroke`/`end_stroke`/
+  `finalize_stroke`): a drag accumulates dabs into an in-memory alpha mask
+  (`ClonestampState._acc_image`) rather than touching the document on every
+  dab. `finalize_stroke` is the *only* place that calls
+  `Node.setPixelData()` -- once, at mouse-release, compositing the whole
+  stroke's accumulated mask over the destination in one pass. This is what
+  gives the plugin a single undo step per stroke; Krita's scripting API has
+  no undo-grouping/macro call that would let multiple smaller writes be
+  merged into one after the fact, so accumulate-then-write-once is the only
+  way to get that at all. (The docker's `_StrokeOverlay` fakes a live
+  on-canvas look during the drag without needing any of this to change --
+  see its docstring.)
+
+- **Preview helpers** (`preview_offset`/`preview_patch`/`build_alpha_mask`):
+  shared by the docker's brush-cursor ghost-preview and its live drag
+  overlay, so both draw from the exact same source-offset and soft-mask
+  math the real paint will eventually use, rather than duplicating it.
 """
 
 import os
@@ -38,7 +74,7 @@ def _debug(msg, force=False):
 SUPPORTED_COLOR_MODEL = "RGBA"
 SUPPORTED_COLOR_DEPTH = "U8"
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
 
 # Krita's default 8-bit RGBA layers store pixels as straight (non-premultiplied)
@@ -103,6 +139,26 @@ class ClonestampState:
     def clear_accumulator(self):
         self._acc_image = None
         self._acc_bounds = None
+
+    def clear_source(self):
+        """Drops the sampled source point/node and its frozen pixel
+        snapshot. STATE is a module-level singleton shared across every
+        open document in this Krita session -- without calling this when
+        the active document changes, a source sampled on one document
+        would silently keep being read from on another, which is wrong on
+        every level (wrong node reference, wrong pixel content) even if
+        Krita's API doesn't raise an error for it. Deliberately *not*
+        called from every disarm -- only where the active document is
+        known to have actually changed -- so a plain manual toggle-off/
+        toggle-on of the brush on the same document doesn't lose the
+        user's sample for no reason."""
+        self.source_node = None
+        self.source_point = None
+        self.stroke_offset = None
+        self.last_dab_point = None
+        self._source_snapshot = None
+        self._source_snapshot_left = 0
+        self._source_snapshot_top = 0
 
 
 STATE = ClonestampState()

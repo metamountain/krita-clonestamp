@@ -1,5 +1,60 @@
 # SPDX-License-Identifier: CC0-1.0
 # SPDX-FileCopyrightText: 2026 metamountain <mail@metamountain.net>
+"""UI/interaction layer for the Clone Stamp docker -- the part of the plugin
+that talks to Krita's Qt widgets and turns mouse input into calls into
+clonestamp_core.py (the pixel logic, kept separate and Qt-widget-free).
+
+Feature map, for anyone new to this file:
+
+- **Enable/disable** (`onEnableToggled` -> `_arm`/`_disarm`): finds Krita's
+  canvas widget and installs a `QApplication`-global event filter on it.
+  This is the plugin's whole reason for existing as a docker instead of a
+  real toolbox tool -- Krita's Python scripting API (`libkis`) has no way to
+  register a new `KisTool`, so this intercepts mouse events on the existing
+  canvas widget from the outside instead.
+
+- **Sample + paint** (`_onCanvasPress`/`_onCanvasRelease`/`_onTimerTick`):
+  Ctrl+click samples a source point (`core.sample_source_point`); a plain
+  click+drag paints (`core.begin_stroke`/`continue_stroke`/`finalize_stroke`
+  in core.py). Only mouse Press/Release are real Qt events here -- a drag's
+  continuous motion is read by polling `QCursor.pos()` on a 30ms `_timer`,
+  because continuous mouse-move isn't exposed to Krita's scripting API at
+  all (see `eventFilter`).
+
+- **Live drag preview** (`_StrokeOverlay`, `_stampOverlayDab`): the real
+  pixel write only happens once, at mouse-release, for a clean single-step
+  undo (see core.finalize_stroke's docstring for why). This transparent
+  overlay widget mirrors that in-progress write visually during the drag by
+  stamping each dab into an offscreen pixmap -- no Krita API calls, so no
+  extra lag or undo steps, and nothing is ever committed to the document
+  from here.
+
+- **Brush cursor** (`_updateBrushCursor`): the ring/crosshair/ghost-preview
+  cursor shown while hovering or dragging, built as a custom `QCursor` from
+  a hand-painted `QPixmap` (Krita's own native brush-outline cursor is
+  toggled off for as long as this plugin is armed -- see
+  `_toggleNativeBrushOutline` -- since it doesn't apply while a different
+  tool, the one this plugin is layered on top of, is actually active).
+
+- **Shift-drag resize** (`_onResizeTick`): drag horizontally for brush size,
+  vertically for hardness, Photoshop-style. The ring cursor is switched off
+  for the duration and the real OS cursor is blanked and warped back to the
+  drag's start point every tick so it neither moves nor flickers -- see
+  `_onResizeTick`'s own comment for the full reasoning, including two
+  earlier approaches that didn't work and why. Live size/hardness feedback
+  comes from a ring drawn on the stroke overlay at the anchor position
+  (`_drawResizeRing`).
+
+- **Canvas-change tracking** (`canvasChanged`): re-resolves the canvas
+  widget and live-preview overlay whenever Krita's active canvas changes
+  (new document, switched tabs, etc.) -- without this, the plugin keeps
+  matching events against whatever canvas was active when it was enabled,
+  and silently stops responding once that's no longer the visible one.
+
+- **Self-update** (`_onCheckForUpdates`, delegates to clonestamp_update.py):
+  checks the `main` branch on GitHub for a newer `core.VERSION` and, if
+  found, downloads the current plugin files straight into this install.
+"""
 
 import os
 import time
@@ -32,7 +87,70 @@ def _find_canvas_widget():
     central = qwin.centralWidget()
     if central is None:
         return None
-    return central.findChild(QOpenGLWidget)
+    # CONFIRMED root cause (2026-07-18, direct user report: "if i close
+    # doc1 it works in doc2"): with more than one document open, Krita's
+    # widget tree holds one QOpenGLWidget per open document/view
+    # simultaneously -- findChild() (singular) always returns the *first*
+    # one found in tree order, i.e. whichever document was opened first,
+    # regardless of which is actually active.
+    #
+    # First attempt: findChildren() (plural) + picking whichever reports
+    # isVisible() -- still didn't work. That fix assumed Krita's inactive
+    # documents are actually hidden (true for a plain QTabWidget/
+    # QStackedWidget), but Krita's default window mode is a QMdiArea
+    # (Subwindow mode) where *all* open subwindows can report isVisible()
+    # True simultaneously -- only "active/focused" distinguishes them, not
+    # visibility. Confirmed via a real-world working example found online:
+    # `window().qwindow().centralWidget().currentWidget().activeSubWindow()`
+    # -- centralWidget() is a QStackedWidget (switches between a welcome
+    # page and the real MDI area), whose currentWidget() is the QMdiArea,
+    # whose activeSubWindow() is the genuinely-focused document. Going
+    # straight to Qt's own MDI-active-tracking sidesteps the whole
+    # visibility-guessing approach entirely.
+    mdi_area = None
+    if hasattr(central, "activeSubWindow"):
+        mdi_area = central
+    else:
+        current = central.currentWidget() if hasattr(central, "currentWidget") else None
+        if current is not None and hasattr(current, "activeSubWindow"):
+            mdi_area = current
+    if mdi_area is not None:
+        active_sub = mdi_area.activeSubWindow()
+        if active_sub is not None:
+            widget = active_sub.findChild(QOpenGLWidget)
+            if widget is not None:
+                return widget
+
+    # Fallback for Tabbed mode (no QMdiArea at all -- there, findChildren()
+    # + isVisible() is actually correct, since Krita's tab implementation
+    # does hide inactive documents' widgets).
+    candidates = central.findChildren(QOpenGLWidget)
+    for w in candidates:
+        if w.isVisible():
+            return w
+    # Nothing matched either path (e.g. a transient moment during window
+    # setup) -- fall back to the first candidate rather than refusing to
+    # arm at all; _arm() already has its own "couldn't find canvas"
+    # message for the genuine no-candidates case.
+    return candidates[0] if candidates else None
+
+
+def _active_document_id():
+    """A stable, plain-string identity for whichever document is currently
+    active, or None if there isn't one -- used by the canvas-watch timer to
+    detect a document switch. Deliberately not `Krita.instance()
+    .activeDocument()` compared by `is`: sip can hand back a fresh Python
+    wrapper object for the same underlying document on every call, which
+    would make an identity comparison unreliable. A document's root node's
+    uniqueId() is a real QUuid tied to the document itself, stringified
+    here so callers get a plain, safely-comparable/loggable value."""
+    doc = Krita.instance().activeDocument()
+    if doc is None:
+        return None
+    root = doc.rootNode()
+    if root is None:
+        return None
+    return str(root.uniqueId())
 
 
 class _StrokeOverlay(QWidget):
@@ -126,12 +244,20 @@ class _StrokeOverlay(QWidget):
 
 
 class ClonestampDocker(DockWidget):
+    """The plugin's whole UI and event-handling surface: a settings panel
+    (Size/Hardness/Opacity/Aligned/Sample, registered with Krita as a
+    dockable panel via __init__.py) plus, while "Enable Clone Brush" is
+    checked, an event filter that turns canvas mouse events into clone-stamp
+    strokes. See the module docstring above for the full feature map --
+    this class is the one place all of those features are wired together.
+    """
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Clonestamp Tool with Preview")
 
         self._canvas_widget = None
+        self._armed_doc_id = None
         self._overlay = None
         self._stroke_active = False
         self._resize_active = False
@@ -155,6 +281,34 @@ class ClonestampDocker(DockWidget):
         self._hover_timer = QTimer(self)
         self._hover_timer.setInterval(200)
         self._hover_timer.timeout.connect(self._onHoverTick)
+        # Polling fallback for document/canvas changes. canvasChanged() is
+        # documented to fire when the active canvas changes, but repeated
+        # hands-on testing -- with forced debug logging that never once
+        # fired, despite confirming Krita's own process can write to that
+        # same TEMP folder -- shows it does NOT reliably fire for a plain
+        # File>New while this docker's original document stays open in
+        # another tab (only, it seems, for switching between two *already
+        # open* documents). Polling every 500ms sidesteps needing to know
+        # exactly which Krita-internal notification covers which case: it
+        # just directly checks whether the resolved canvas widget still
+        # matches what we're tracking, independent of any callback at all.
+        self._canvas_watch_timer = QTimer(self)
+        self._canvas_watch_timer.setInterval(500)
+        self._canvas_watch_timer.timeout.connect(self._onCanvasChangedDeferred)
+        # Coalesces bursts of Size/Hardness changes from the spin boxes and
+        # slider (scroll-wheel and click-and-hold arrow-repeat can both fire
+        # valueChanged much faster than a human drag ever would) into at
+        # most one _updateBrushCursor() rebuild every 50ms, instead of doing
+        # a full QPixmap rebuild + native setCursor() call -- expensive, and
+        # visibly flickery on Windows -- for every single tick of the spin
+        # box. See _onSizeChanged/_onHardnessChanged for where this is used;
+        # _onHoverTick/_onTimerTick don't need it since those already run on
+        # their own fixed-rate timers (200ms/30ms) rather than firing
+        # unboundedly like a scrubbed UI control can.
+        self._cursor_refresh_timer = QTimer(self)
+        self._cursor_refresh_timer.setSingleShot(True)
+        self._cursor_refresh_timer.setInterval(50)
+        self._cursor_refresh_timer.timeout.connect(self._updateBrushCursor)
         self._last_cursor_zoom = -1.0
         self._last_cursor_size = -1
         self._tick_counter = 0
@@ -253,6 +407,15 @@ class ClonestampDocker(DockWidget):
         self.brushStatusLabel.setWordWrap(True)
         layout.addWidget(self.brushStatusLabel)
 
+        resetButton = QPushButton("Reset (debug)")
+        resetButton.setToolTip(
+            "Forcibly tears down and re-syncs plugin state without "
+            "restarting Krita -- use if the brush gets stuck disabled, "
+            "stuck enabled but unresponsive, or shows a stale source after "
+            "switching documents.")
+        resetButton.clicked.connect(self._onResetClicked)
+        layout.addWidget(resetButton)
+
         aboutRow = QHBoxLayout()
         versionLabel = QLabel("v{0}".format(core.VERSION))
         aboutRow.addWidget(versionLabel)
@@ -276,28 +439,67 @@ class ClonestampDocker(DockWidget):
 
     def canvasChanged(self, canvas):
         # Krita calls this whenever the active canvas changes -- opening a
-        # new document, switching tabs, closing a document, etc. Our own
-        # _canvas_widget was only ever resolved once, in _arm(), so without
-        # this the event filter kept matching mouse events against
-        # whichever canvas widget was active back when the brush was
-        # enabled -- once a second document existed, that widget was no
-        # longer the visible/active one, so the tool silently stopped
-        # responding on the new document. Re-resolving and reparenting the
-        # overlays here is what actually fixes that.
-        if not self.enableCheck.isChecked() or self._canvas_widget is None:
+        # new document, switching tabs, closing a document, etc.
+        #
+        # CONFIRMED via kritacrash.log (2026-07-18 15:56:12): Krita can call
+        # this *synchronously from inside a KisView's C++ destructor*. Full
+        # stack: sipDockWidget::canvasChanged -> DockWidget::unsetCanvas ->
+        # KoCanvasControllerWidget::unsetCanvas/setCanvas -> KisView::~KisView
+        # -> ... -> an Access Violation surfaced inside python313.dll's own
+        # call dispatch. Doing any widget-touching work here synchronously --
+        # unsetCursor() on a canvas widget that may be mid-teardown,
+        # setParent(None)/deleteLater() on overlays parented to it, even just
+        # walking the widget tree in _find_canvas_widget() -- risks hitting
+        # that same reentrancy hazard again: Python callbacks invoked from
+        # arbitrary nested C++ destructor call stacks are a known-fragile
+        # pattern in PyQt/sip. Deferred via QTimer.singleShot(0, ...) so the
+        # actual logic below runs on a clean event-loop tick, after whatever
+        # Qt/C++ teardown triggered this callback has actually finished,
+        # instead of nested inside it.
+        QTimer.singleShot(0, self._onCanvasChangedDeferred)
+
+    def _onCanvasChangedDeferred(self):
+        # Originally compared _find_canvas_widget()'s resolved QOpenGLWidget
+        # against the one captured at _arm() time. That never once caught a
+        # File>New switch, on either the canvasChanged callback or a 500ms
+        # poll -- the likely explanation, given both approaches failed the
+        # same way, is that Krita reuses a single canvas widget per window
+        # and just repoints its render target internally, so the widget's
+        # *identity* never changes at all regardless of which document is
+        # active. No amount of polling that specific signal was ever going
+        # to catch it.
+        #
+        # Switched to a fundamentally different, more direct signal: the
+        # active *document's* identity, via its root node's uniqueId() (a
+        # stable QUuid, stringified for a plain, safely-comparable value --
+        # not a sip wrapper-object identity, which can be a fresh Python
+        # proxy on every call even for the same underlying document).
+        if not self.enableCheck.isChecked():
             return
-        widget = _find_canvas_widget()
-        if widget is None or widget is self._canvas_widget:
+        current_id = _active_document_id()
+        if current_id == self._armed_doc_id:
             return
-        self._teardownOverlays()
-        self._canvas_widget = widget
-        self._setupOverlays()
-        # New widget, no cursor set on it yet -- force the next
-        # _updateBrushCursor to actually rebuild and set one.
-        self._cursor_sig = None
-        current = self._currentCanvas()
-        if current is not None:
-            self._last_cursor_zoom = current.zoomLevel()
+        _debug("canvas watch: active document changed (%s -> %s) -- disabling" % (
+            self._armed_doc_id, current_id), force=True)
+        # Confirmed via a second real traceback: setChecked(False) below
+        # triggers onEnableToggled -> _disarm() synchronously, and by the
+        # time control returns here this docker's *own* child widgets
+        # (liveSourceLabel, in the traceback -- not just the canvas widget
+        # this method already accounts for) can already be gone too,
+        # RuntimeError on the very next line touching one. Whatever is
+        # tearing this docker down (its window/view being closed) can
+        # apparently progress further while this handler is still on the
+        # stack. Broadly caught rather than guarding each widget
+        # individually -- there's nothing left worth doing here once any
+        # of this starts failing.
+        try:
+            self.enableCheck.setChecked(False)  # triggers onEnableToggled -> _disarm()
+            core.STATE.clear_source()
+            self.liveSourceLabel.setText("Source: none")
+            self.brushStatusLabel.setText(
+                "Clone Brush disabled: active document changed.")
+        except RuntimeError as e:
+            _debug("canvas watch: docker torn down mid-disable: %s" % e, force=True)
 
     def closeEvent(self, event):
         self._disarm()
@@ -307,7 +509,10 @@ class ClonestampDocker(DockWidget):
 
     def _onSizeChanged(self, value):
         core.STATE.brush_size = value
-        self._updateBrushCursor()
+        # Throttled, not immediate -- see _cursor_refresh_timer in __init__
+        # for why a direct _updateBrushCursor() call here flickers when this
+        # fires rapidly (scroll-wheel/arrow-repeat on the spin box).
+        self._cursor_refresh_timer.start()
 
     def _onHardnessChanged(self, value):
         core.STATE.brush_hardness = value / 100.0
@@ -317,7 +522,7 @@ class ClonestampDocker(DockWidget):
         self.hardnessSpin.blockSignals(True)
         self.hardnessSpin.setValue(value)
         self.hardnessSpin.blockSignals(False)
-        self._updateBrushCursor()
+        self._cursor_refresh_timer.start()
 
     def _onBrushOpacityChanged(self, value):
         core.STATE.brush_opacity = value
@@ -380,14 +585,74 @@ class ClonestampDocker(DockWidget):
         else:
             self._disarm()
 
+    def _onResetClicked(self):
+        """Debug/recovery tool, not part of the normal enable/disable flow:
+        forcibly tears down and clears all plugin state without needing to
+        restart Krita. Unlike _disarm(), which assumes it's running from a
+        cleanly-armed state, this is written to be safe to call from *any*
+        state, including a stuck/half-torn-down one -- e.g. if a prior
+        document-switch handler raised partway through and left
+        _canvas_widget pointing at an already-deleted widget. Every widget
+        touch is individually guarded so one already-dead object can't
+        stop the rest of the reset from completing, and it bypasses
+        enableCheck's toggled signal (blockSignals) rather than going
+        through onEnableToggled/_disarm -- calling back into the exact
+        code path that might be the reason something got stuck would
+        defeat the point of a recovery button.
+
+        Deliberately does NOT touch Krita's native brush-outline toggle
+        (see _toggleNativeBrushOutline) -- that's a blind toggle with no
+        "set to X" API, so calling it during an unknown/possibly-already-
+        wrong state has even odds of making it worse instead of better;
+        if that's visibly stuck after a reset, restarting Krita is the
+        only sure fix (see the README's documented limitation on this)."""
+        self._hover_timer.stop()
+        self._canvas_watch_timer.stop()
+        self._timer.stop()
+        if self._canvas_widget is not None:
+            try:
+                QApplication.instance().removeEventFilter(self)
+            except RuntimeError:
+                pass
+            try:
+                self._canvas_widget.unsetCursor()
+            except RuntimeError:
+                pass
+        self._teardownOverlays()
+        self._stroke_active = False
+        self._resize_active = False
+        self._canvas_widget = None
+        self._armed_doc_id = None
+        core.STATE.clear_source()
+        core.STATE.clear_accumulator()
+        self.liveSourceLabel.setText("Source: none")
+        self.enableCheck.blockSignals(True)
+        self.enableCheck.setChecked(False)
+        self.enableCheck.blockSignals(False)
+        self.brushStatusLabel.setText(
+            "Reset. Re-check “Enable Clone Brush” to start fresh.")
+        _debug("manual reset (debug button) triggered", force=True)
+
     def _arm(self):
         widget = _find_canvas_widget()
         if widget is None:
+            # TEMPORARY diagnostic (force=True) -- investigating a separate
+            # report ("can't activate in second file") from the same
+            # session as the canvas-teardown crashes above. Narrows down
+            # which step of the window/qwindow/centralWidget/findChild
+            # chain is actually failing on a second document, rather than
+            # guessing. Remove once that's root-caused.
+            window = Krita.instance().activeWindow()
+            qwin = window.qwindow() if window is not None else None
+            central = qwin.centralWidget() if qwin is not None else None
+            _debug("_arm: find_canvas_widget failed -- window=%s qwin=%s central=%s" % (
+                window, qwin, central), force=True)
             self.brushStatusLabel.setText(
                 "Could not find the canvas widget; Clone Brush can't be enabled.")
             self.enableCheck.setChecked(False)
             return
         self._canvas_widget = widget
+        self._armed_doc_id = _active_document_id()
         self._setupOverlays()
         QApplication.instance().installEventFilter(self)
         self._toggleNativeBrushOutline()
@@ -400,19 +665,34 @@ class ClonestampDocker(DockWidget):
         if core.STATE.has_point_source:
             self._hover_timer.start()
             self._onHoverTick()
+        self._canvas_watch_timer.start()
         self.brushStatusLabel.setText("Clone Brush enabled.")
 
     def _disarm(self):
         self._hover_timer.stop()
+        self._canvas_watch_timer.stop()
         if self._canvas_widget is not None:
             QApplication.instance().removeEventFilter(self)
-            self._canvas_widget.unsetCursor()
+            # Confirmed via a real traceback: when _disarm() runs because
+            # the canvas-watch timer detected the *document being closed*
+            # (not just switched away from), the underlying C++
+            # QOpenGLWidget for that document/view is already destroyed by
+            # the time this runs -- Qt/sip raises RuntimeError on any
+            # further access to it ("wrapped C/C++ object ... has been
+            # deleted"), not a hard crash, but it needs catching rather
+            # than propagating out of a signal handler. Nothing else to do
+            # in that case -- there's no cursor left to unset.
+            try:
+                self._canvas_widget.unsetCursor()
+            except RuntimeError as e:
+                _debug("_disarm: canvas widget already deleted: %s" % e, force=True)
             self._cursor_sig = None
             self._toggleNativeBrushOutline()
         self._timer.stop()
         self._stroke_active = False
         self._resize_active = False
         self._canvas_widget = None
+        self._armed_doc_id = None
         self._teardownOverlays()
         self.brushStatusLabel.setText("")
 
@@ -421,8 +701,16 @@ class ClonestampDocker(DockWidget):
 
     def _teardownOverlays(self):
         if self._overlay is not None:
-            self._overlay.setParent(None)
-            self._overlay.deleteLater()
+            # Same reasoning as _disarm()'s unsetCursor() guard -- the
+            # overlay is parented to the canvas widget, so if that widget's
+            # C++ object was already destroyed (document closed), Qt will
+            # have already torn down this child too, and setParent()/
+            # deleteLater() on an already-deleted wrapper raises RuntimeError.
+            try:
+                self._overlay.setParent(None)
+                self._overlay.deleteLater()
+            except RuntimeError as e:
+                _debug("_teardownOverlays: overlay already deleted: %s" % e, force=True)
             self._overlay = None
 
     def _toggleNativeBrushOutline(self):
@@ -444,6 +732,18 @@ class ClonestampDocker(DockWidget):
     # --- event filter: only press/release are used; drag is timer-driven --
 
     def eventFilter(self, obj, event):
+        # TEMPORARY diagnostic (force=True) -- logs every MouseButtonPress
+        # app-wide, before the widget-match check below, specifically to
+        # see whether a press on a newly-opened document's canvas even
+        # matches self._canvas_widget at all. Remove once the "doesn't work
+        # after opening a new document" report is root-caused; see the
+        # matching logs in _find_canvas_widget/canvasChanged.
+        if event.type() == QEvent.MouseButtonPress:
+            _debug("eventFilter: PRESS obj=%s id=%s tracked_id=%s match=%s" % (
+                obj.__class__.__name__, id(obj),
+                id(self._canvas_widget) if self._canvas_widget is not None else None,
+                obj is self._canvas_widget), force=True)
+
         if obj is not self._canvas_widget:
             return False
 
@@ -453,6 +753,19 @@ class ClonestampDocker(DockWidget):
                 return self._onCanvasPress(event)
             elif et == QEvent.MouseButtonRelease:
                 return self._onCanvasRelease(event)
+            elif et == QEvent.MouseMove:
+                # Swallowed for the entire time the plugin is armed, not
+                # just during a resize drag -- previously only the resize
+                # case was covered, but the same mechanism applies whenever
+                # the mouse is simply hovering or painting: Krita's own
+                # underlying tool (whatever's selected in the toolbox
+                # underneath ours) still saw every real MouseMove and kept
+                # re-asserting its own cursor -- e.g. the selected brush
+                # preset's size circle -- over ours, which is what a
+                # "second circle" report turned out to be. None of our own
+                # tracking (hover/drag/resize) needs these events either;
+                # it's all timer-driven, polling QCursor.pos() directly.
+                return True
         except Exception as e:
             # Exceptions are rare and always worth a trace, even with the
             # debug gate off -- hence force=True.
@@ -499,29 +812,23 @@ class ClonestampDocker(DockWidget):
             self._resize_zoom = canvas.zoomLevel() if canvas else 1.0
             self._resize_anchor_local = self._canvas_widget.mapFromGlobal(
                 self._resize_start_global)
-            # Our ring cursor is switched off for the whole resize drag --
-            # see _onResizeTick for why -- and back on at release. Live
-            # size/hardness feedback comes from a ring drawn on the stroke
-            # overlay at the anchor position instead (a plain widget, so
-            # immune to the cursor re-assert problem that sank the earlier
-            # blank-cursor attempt).
+            # Live size/hardness feedback during the drag comes from a ring
+            # drawn on the stroke overlay at the anchor position -- a plain
+            # widget, so the underlying tool can't re-assert anything over
+            # it the way it can with a cursor.
             if self._overlay is not None:
                 self._overlay.reset(self._canvas_widget.size())
                 self._overlay.show()
                 self._overlay.raise_()
                 self._drawResizeRing()
-            self._canvas_widget.unsetCursor()
-            # The signature cache must not survive an unsetCursor(), or a
+            # Blanked (not just unset) and warped back to this exact spot
+            # every tick for the whole drag -- see _onResizeTick for why
+            # that combination finally holds without flicker this time.
+            self._canvas_widget.setCursor(Qt.BlankCursor)
+            # The signature cache must not survive the cursor swap, or a
             # resize that lands back on identical values would skip the
-            # setCursor() at release and leave no ring cursor at all.
+            # setCursor() at release and leave the cursor blank for good.
             self._cursor_sig = None
-            # Faster tick while resizing: the cursor warp below (see
-            # _onResizeTick) lets the pointer wander for one tick interval
-            # before snapping it back, and that visible excursion is the
-            # remaining jitter/flicker -- a 10ms leash keeps it short. The
-            # tick itself does almost no work, and the interval is restored
-            # to 30ms at release.
-            self._timer.setInterval(10)
             self._timer.start()
             return True
 
@@ -572,7 +879,6 @@ class ClonestampDocker(DockWidget):
             self._onHoverTick()
         if self._resize_active:
             self._resize_active = False
-            self._timer.setInterval(30)  # restore the paint-drag cadence
             if self._overlay is not None:
                 self._overlay.setVisible(False)
             cursor_brush_status = (
@@ -601,7 +907,16 @@ class ClonestampDocker(DockWidget):
             return
 
         self._tick_counter += 1
-        local_pos = self._canvas_widget.mapFromGlobal(QCursor.pos())
+        try:
+            local_pos = self._canvas_widget.mapFromGlobal(QCursor.pos())
+        except RuntimeError as e:
+            # Same reasoning as _onHoverTick's guard -- this timer only runs
+            # during an active drag, so the window is narrower, but not zero
+            # (e.g. Ctrl+W mid-drag).
+            _debug("_onTimerTick: canvas widget already deleted: %s" % e, force=True)
+            self._stroke_active = False
+            self._timer.stop()
+            return
         canvas = self._currentCanvas()
         if canvas is None or not core.coordinate_mapping_reliable(canvas):
             return
@@ -649,35 +964,37 @@ class ClonestampDocker(DockWidget):
         if abs(zoom - self._last_cursor_zoom) > 0.01:
             self._last_cursor_zoom = zoom
             self._last_cursor_size = core.STATE.brush_size
-        local_pos = self._canvas_widget.mapFromGlobal(QCursor.pos())
+        # This timer keeps running at 200ms independent of the 500ms canvas-
+        # watch timer, so there's a real (if short) window where the active
+        # document can be closed -- deleting this widget's underlying C++
+        # object -- before the watcher gets a chance to disarm. Same
+        # RuntimeError as _disarm()'s unsetCursor() guard; harmlessly skip
+        # this one tick rather than let it propagate.
+        try:
+            local_pos = self._canvas_widget.mapFromGlobal(QCursor.pos())
+        except RuntimeError as e:
+            _debug("_onHoverTick: canvas widget already deleted: %s" % e, force=True)
+            return
         doc_point = core.map_widget_to_document(canvas, self._canvas_widget, QPointF(local_pos))
         if doc_point is not None:
             self._updateBrushCursor(doc_point)
 
     def _onResizeTick(self):
-        # The OS cursor is warped back to the drag's start position every
-        # tick (below) so it stays visually anchored in place instead of
-        # travelling across the screen while resizing -- Photoshop-style
-        # "scratch pad" feedback. Movement is therefore accumulated across
-        # ticks (each tick's delta is measured from the anchor we just
-        # warped back to) rather than read as one absolute offset from the
-        # start.
-        #
-        # The ring cursor itself is switched off for the whole drag (see
-        # _onCanvasPress) instead of being redrawn every tick -- redrawing
-        # a fresh QPixmap/QCursor on top of a cursor that's also being
-        # warped every ~30ms was the actual source of the flicker; simply
-        # not drawing anything there removes it outright. Size/hardness
-        # still update live in the status label and spin boxes below; only
-        # the on-canvas ring is gone until release, where _onCanvasRelease
-        # switches it back on.
-        #
-        # (A blank-cursor + fixed on-screen ring overlay was tried instead
-        # of just switching the ring off, to still show *something* live --
-        # it made things worse, likely because raw MouseMove events aren't
-        # intercepted by this plugin at all, so Krita's own underlying tool
-        # kept re-asserting its own cursor on top of the blanked one during
-        # the drag. See git history around v1.3.0 if revisiting that.)
+        # The OS cursor is blanked (see _onCanvasPress) *and* warped back to
+        # the anchor every tick below -- while previous attempts treated
+        # those as alternatives (pick one), the actual fix is both together:
+        # blanked means the warp itself is invisible (nothing is rendered at
+        # the cursor position to see, so repositioning it 33x/sec causes no
+        # visible flicker), and the warp is still needed even though it's
+        # invisible -- without it a long drag would run the real OS cursor
+        # into a screen edge and clamp, silently capping how far you can
+        # drag. eventFilter also swallows MouseMove for the whole drag now,
+        # which is what actually made the earlier blank-cursor attempt fail:
+        # without that, Krita's own underlying tool still saw every move and
+        # kept re-asserting its own visible cursor on top of the blanked
+        # one. Deltas are accumulated across ticks (each tick's delta is
+        # measured from the anchor we just warped back to) rather than read
+        # as one absolute offset, matching the warp.
         current = QCursor.pos()
         dx = current.x() - self._resize_start_global.x()
         dy = current.y() - self._resize_start_global.y()
@@ -911,7 +1228,14 @@ class ClonestampDocker(DockWidget):
                    force=True)
         finally:
             painter.end()
-        self._canvas_widget.setCursor(QCursor(pixmap, half, half))
+        # This is called from every hover/drag tick, so it's the most
+        # frequently-hit place that could race against the canvas widget
+        # being torn down mid-teardown -- same RuntimeError as the other
+        # guards in this file, harmlessly skipped rather than propagated.
+        try:
+            self._canvas_widget.setCursor(QCursor(pixmap, half, half))
+        except RuntimeError as e:
+            _debug("_updateBrushCursor: canvas widget already deleted: %s" % e, force=True)
 
     def _refreshPreviewCache(self, cursor_doc_pos, diameter):
         """Recomputes self._preview_cache_image (the scaled+masked ghost of

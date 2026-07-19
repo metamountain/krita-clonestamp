@@ -100,11 +100,19 @@
   Also replaced the "Check for Updates" button's behavior (previously just
   opened the GitHub releases page) with a real check-and-install: new
   `clonestamp_update.py` reads `VERSION` out of `clonestamp_core.py` on the
-  `main` branch via `raw.githubusercontent.com` (no GitHub API/auth/git
-  needed), and if newer, downloads `clonestamp_core.py`/`clonestamp_docker.py`/
-  `__init__.py` into the running install (files fetched to memory first, only
-  written once all succeed, so a dropped connection can't half-update it).
-
+   `main` branch via `raw.githubusercontent.com` (no GitHub API/auth/git
+   needed), and if newer, downloads `clonestamp_core.py`/`clonestamp_docker.py`/
+   `__init__.py` into the running install (files fetched to memory first, only
+   written once all succeed, so a dropped connection can't half-update it).
+- **Rule: rebuild clonestamp.zip before every push** (`python-plugin/clonestamp.zip`):
+   The zip is the distribution artifact for one-click plugin installation (users
+   download it from GitHub and install via Krita's "Install from File"). It must
+   be rebuilt from the working tree (excluding `__pycache__`) before every push,
+   so the repo always ships a zip that matches the current source. Keep the zip
+   *tracked* in git (not in `.gitignore`) so it gets included in every push.
+   Rebuild command: delete `python-plugin/clonestamp.zip`, then zip the contents
+   of `python-plugin/clonestamp/` (excluding `__pycache__`) into it.
+ 
 ## Phase D plan: CS6 options-bar parity
 
 Reference: Photoshop CS6 Clone Stamp options bar (per user screenshot) and
