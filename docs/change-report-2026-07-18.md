@@ -157,6 +157,101 @@ documented future optimization. A docstring now records this trade-off.
   the 0.2s preview-cache interval rationale, and (C++) the gradient-stop
   math and `DestinationIn` masking trick.
 
+## Python — new "Brush cursor outline" toggle (v1.6.0)
+
+Added after hands-on testing reported the ring/ghost-preview cursor still
+misbehaving on the tester's machine. The docker now has a **Brush cursor
+outline** checkbox (default on, below "Aligned"). Unchecking it skips all
+custom-cursor pixmap work in `_updateBrushCursor` and shows a plain
+crosshair instead — painting, sampling, and resize all keep working. This
+is an escape hatch, not a fix: if the outline glitch is reproducible,
+please note the symptoms (wrong position? flicker? stuck? truncated at
+large source offsets? — the pixmap is clamped to 512px, which cuts off the
+source ring when the sample point is far from the cursor) so the root
+cause can be chased properly.
+
+**Test:** arm the brush, toggle the checkbox both ways while hovering,
+during a drag, and during a Shift+drag resize. Off = plain crosshair, on =
+ring returns immediately; no stuck or invisible cursor in either state.
+
+---
+
+# Follow-up pass — 2026-07-19 (v1.7.0, merged with main's v1.5.8 → v1.7.1)
+
+> **Merge note:** the local session independently pushed v1.4.8–v1.5.8 to
+> `main` (MDI-aware canvas finder, document-switch watcher + `clear_source`,
+> blank-cursor resize fix, MouseMove swallowing, cursor-refresh coalescing,
+> zip artifact). This branch now contains BOTH lines. Where they solved the
+> same problem differently, the hands-on-validated `main` fix won: resize
+> uses `Qt.BlankCursor` + warp (not my 10ms leash, which was dropped); my
+> overlay resize ring and cursor signature cache are layered on top.
+> Combined version: **1.7.1**.
+
+Driven by hands-on feedback: "Python plugin flickers a bit during
+mouse-drag brush resize, otherwise all good." Local Krita source build
+lives in `C:\dev` (relevant for compiling the Tool-plugin).
+
+## Python — cursor flicker fixes (two separate sources)
+
+**1. Paint-drag flicker / wasted work:** `_updateBrushCursor` rebuilt the
+cursor pixmap and called `setCursor()` 33x/s during a drag, even though
+with a fixed Aligned offset the pixmap only actually changes at the ~5Hz
+preview refresh. Every needless OS-cursor swap is a flicker opportunity.
+Now a change signature (diameter, source offset, hardness, preview-cache
+timestamp) gates the rebuild — identical frames skip `setCursor()`
+entirely. This is also the biggest remaining CPU win during drags.
+
+**2. Shift+drag resize:** the pointer-warp trick lets the visible cursor
+wander for a full 30ms tick before snapping back — that excursion is the
+jitter. The warp leash is now 10ms during resize (restored to 30ms at
+release), and a live brush ring (solid + dashed hardness ring) is drawn on
+the stroke overlay at the anchor position, so you finally get on-canvas
+size/hardness feedback during resize — same as the C++ tool always had.
+The overlay is a plain widget, so it's immune to the cursor re-assert
+problem that sank the earlier blank-cursor attempt (see v1.3.0 history).
+
+**Test:** (a) sample a source, paint slow and fast drags — the ring cursor
+should no longer flicker; ghost content still refreshes ~5Hz. (b)
+Shift+drag: a ring at the anchor grows/shrinks live (horizontal = size,
+vertical = hardness via dashes), jitter of the OS cursor is much reduced;
+release restores the normal ring cursor — including when you land on the
+exact starting values (regression guard: signature cache is invalidated
+around unsetCursor). (c) Switch documents mid-session; ring cursor must
+still appear on the new canvas.
+
+## Feature/look parity audit — Tool-plugin vs. python-plugin
+
+Aligned in this pass:
+- **Dashed hardness ring** added to the C++ on-canvas outline.
+- **Red source crosshair** in C++ (was white; Python uses red).
+- **Hardness slider + spinbox pair** in the C++ option widget (was
+  spinbox-only), kept in sync with Shift+drag.
+- **Dab placement rounding**: Python now uses round() like C++'s qRound(),
+  so both stamp identical pixels for identical input.
+
+Already identical: defaults (250px / 50% / 100% / Aligned / Current
+Layer), falloff math, dab spacing (15% of diameter, floor 2px), source
+snapshot + accumulate-then-blend architecture, memory caps.
+
+Remaining known differences (deliberate, low priority):
+- **Live stroke preview while dragging**: Python stamps dabs onto its
+  overlay; the C++ tool shows only the ghost patch under the cursor and
+  the real pixels appear at release. Porting the overlay needs a canvas
+  decoration in KisTool — noted as future work.
+- **Ghost preview strength**: C++ draws at 0.6 opacity; Python masks at
+  70/255. Visually close; not worth unifying blind — judge by eye.
+- **Python-only UI**: Enable checkbox, cursor-outline toggle, update
+  button — all artifacts of the docker/event-filter architecture; the C++
+  tool doesn't need them.
+- **Python cursor pixmap is clamped to 512px**, so its source ring is cut
+  off at large sample offsets; the C++ paint()-based outline has no clamp.
+- **Oversized canvas (>200M px)**: Python refuses the stroke with an
+  error; C++ falls back to per-dab compositing (no error channel).
+
+**Test:** run both side by side on the same document: same defaults, same
+stroke result for the same gesture, same ring/crosshair/dash look; C++
+hardness slider tracks Shift+drag.
+
 ---
 
 ## Suggested test order for the local session

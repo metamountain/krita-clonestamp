@@ -38,11 +38,12 @@ Feature map, for anyone new to this file:
 
 - **Shift-drag resize** (`_onResizeTick`): drag horizontally for brush size,
   vertically for hardness, Photoshop-style. The ring cursor is switched off
-  entirely for the duration (no live ring shown while resizing) and the
-  real OS cursor is blanked and warped back to the drag's start point every
-  tick so it neither moves nor flickers -- see `_onResizeTick`'s own
-  comment for the full reasoning, including two earlier approaches that
-  didn't work and why.
+  for the duration and the real OS cursor is blanked and warped back to the
+  drag's start point every tick so it neither moves nor flickers -- see
+  `_onResizeTick`'s own comment for the full reasoning, including two
+  earlier approaches that didn't work and why. Live size/hardness feedback
+  comes from a ring drawn on the stroke overlay at the anchor position
+  (`_drawResizeRing`).
 
 - **Canvas-change tracking** (`canvasChanged`): re-resolves the canvas
   widget and live-preview overlay whenever Krita's active canvas changes
@@ -184,10 +185,12 @@ class _StrokeOverlay(QWidget):
         # committed pixels) took over at release.
         self.setAttribute(Qt.WA_AlwaysStackOnTop)
         self._pixmap = None
+        self._last_ring_rect = None
 
     def reset(self, size):
         self._pixmap = QPixmap(size)
         self._pixmap.fill(Qt.transparent)
+        self._last_ring_rect = None
         self.setGeometry(0, 0, size.width(), size.height())
 
     def stampAt(self, target_rect, image):
@@ -198,6 +201,40 @@ class _StrokeOverlay(QWidget):
         painter.drawImage(target_rect, image)
         painter.end()
         self.update(target_rect.toAlignedRect())
+
+    def showRing(self, center, diameter, hardness):
+        """Draws a static brush ring (plus the dashed hardness ring) at
+        `center` in widget coordinates -- the live size/hardness readout
+        during a Shift+drag resize, where the QCursor-based ring is
+        switched off (see _onResizeTick). Replaces the pixmap content:
+        the overlay never shows a stroke and this ring at the same time,
+        and repainting only the union of the old and new ring rects keeps
+        the per-tick cost small even at the faster resize cadence."""
+        if self._pixmap is None:
+            return
+        self._pixmap.fill(Qt.transparent)
+        painter = QPainter(self._pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(Qt.NoBrush)
+        x = center.x() - diameter / 2.0
+        y = center.y() - diameter / 2.0
+        painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
+        painter.drawEllipse(QRectF(x + 1, y + 1, diameter, diameter))
+        painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
+        painter.drawEllipse(QRectF(x, y, diameter, diameter))
+        hd = max(3.0, diameter * hardness)
+        inset = (diameter - hd) / 2.0
+        painter.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt.DashLine))
+        painter.drawEllipse(QRectF(x + inset + 1, y + inset + 1, hd, hd))
+        painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.DashLine))
+        painter.drawEllipse(QRectF(x + inset, y + inset, hd, hd))
+        painter.end()
+
+        ring_rect = QRectF(x, y, diameter, diameter).adjusted(-2, -2, 3, 3).toAlignedRect()
+        dirty = ring_rect if self._last_ring_rect is None \
+            else ring_rect.united(self._last_ring_rect)
+        self._last_ring_rect = ring_rect
+        self.update(dirty)
 
     def paintEvent(self, event):
         if self._pixmap is None:
@@ -231,6 +268,13 @@ class ClonestampDocker(DockWidget):
         self._resize_start_hardness_pct = None
         self._resize_accum_dx = 0
         self._resize_accum_dy = 0
+        self._resize_zoom = 1.0
+        self._resize_anchor_local = None
+        # Signature of the last cursor pixmap actually handed to setCursor()
+        # (see _updateBrushCursor) -- swapping the OS cursor 33x/s during a
+        # drag when its content hasn't changed was both wasted work and a
+        # visible flicker source.
+        self._cursor_sig = None
         self._timer = QTimer(self)
         self._timer.setInterval(30)
         self._timer.timeout.connect(self._onTimerTick)
@@ -338,6 +382,16 @@ class ClonestampDocker(DockWidget):
         self.alignedCheck.setChecked(core.STATE.aligned)
         self.alignedCheck.toggled.connect(self._onAlignedToggled)
         layout.addWidget(self.alignedCheck)
+
+        # Escape hatch for the ring/ghost-preview cursor: it's the most
+        # platform-sensitive part of this plugin (QCursor pixmap size
+        # limits, per-tick pixmap rebuilds), so if it misbehaves on a given
+        # machine it can be switched off entirely -- painting keeps working,
+        # with a plain crosshair marking the paint position instead.
+        self.cursorOutlineCheck = QCheckBox("Brush cursor outline")
+        self.cursorOutlineCheck.setChecked(True)
+        self.cursorOutlineCheck.toggled.connect(self._onCursorOutlineToggled)
+        layout.addWidget(self.cursorOutlineCheck)
 
         sampleRow = QHBoxLayout()
         sampleRow.addWidget(QLabel("Sample:"))
@@ -476,6 +530,14 @@ class ClonestampDocker(DockWidget):
     def _onAlignedToggled(self, checked):
         core.STATE.aligned = checked
 
+    def _onCursorOutlineToggled(self, checked):
+        # _updateBrushCursor itself branches on the checkbox, so one call
+        # applies the new state immediately in both directions (ring back
+        # on, or replaced by the plain crosshair).
+        if self._canvas_widget is None:
+            return
+        self._updateBrushCursor()
+
     def _onSampleScopeChanged(self, index):
         core.STATE.sample_scope = "all" if index == 1 else "current"
 
@@ -594,6 +656,7 @@ class ClonestampDocker(DockWidget):
         self._setupOverlays()
         QApplication.instance().installEventFilter(self)
         self._toggleNativeBrushOutline()
+        self._cursor_sig = None
         self._updateBrushCursor()
         canvas = self._currentCanvas()
         if canvas:
@@ -623,6 +686,7 @@ class ClonestampDocker(DockWidget):
                 self._canvas_widget.unsetCursor()
             except RuntimeError as e:
                 _debug("_disarm: canvas widget already deleted: %s" % e, force=True)
+            self._cursor_sig = None
             self._toggleNativeBrushOutline()
         self._timer.stop()
         self._stroke_active = False
@@ -745,10 +809,26 @@ class ClonestampDocker(DockWidget):
             self._resize_start_hardness_pct = int(round(core.STATE.brush_hardness * 100))
             self._resize_accum_dx = 0
             self._resize_accum_dy = 0
+            self._resize_zoom = canvas.zoomLevel() if canvas else 1.0
+            self._resize_anchor_local = self._canvas_widget.mapFromGlobal(
+                self._resize_start_global)
+            # Live size/hardness feedback during the drag comes from a ring
+            # drawn on the stroke overlay at the anchor position -- a plain
+            # widget, so the underlying tool can't re-assert anything over
+            # it the way it can with a cursor.
+            if self._overlay is not None:
+                self._overlay.reset(self._canvas_widget.size())
+                self._overlay.show()
+                self._overlay.raise_()
+                self._drawResizeRing()
             # Blanked (not just unset) and warped back to this exact spot
             # every tick for the whole drag -- see _onResizeTick for why
             # that combination finally holds without flicker this time.
             self._canvas_widget.setCursor(Qt.BlankCursor)
+            # The signature cache must not survive the cursor swap, or a
+            # resize that lands back on identical values would skip the
+            # setCursor() at release and leave the cursor blank for good.
+            self._cursor_sig = None
             self._timer.start()
             return True
 
@@ -799,6 +879,8 @@ class ClonestampDocker(DockWidget):
             self._onHoverTick()
         if self._resize_active:
             self._resize_active = False
+            if self._overlay is not None:
+                self._overlay.setVisible(False)
             cursor_brush_status = (
                 "Size: {0} px  Hardness: {1}%  Opacity: {2}%"
                 .format(core.STATE.brush_size,
@@ -941,6 +1023,19 @@ class ClonestampDocker(DockWidget):
             self.hardnessSpin.setValue(new_hardness_pct)
             self.hardnessSpin.blockSignals(False)
 
+        if size_changed or hardness_changed:
+            self._drawResizeRing()
+
+    def _drawResizeRing(self):
+        """Refreshes the overlay's live brush ring during a Shift+drag
+        resize -- drawn at the (fixed) anchor position, since the pointer
+        is warped back there every tick anyway."""
+        if self._overlay is None or self._resize_anchor_local is None:
+            return
+        diameter = max(4.0, core.STATE.brush_size * self._resize_zoom)
+        self._overlay.showRing(self._resize_anchor_local, diameter,
+                               core.STATE.brush_hardness)
+
     def _stampOverlayDab(self, doc_point, canvas, zoom):
         """Draws one masked source dab onto the live stroke overlay at
         doc_point, in screen space -- called once per new dab from
@@ -979,12 +1074,49 @@ class ClonestampDocker(DockWidget):
         crosshair + source outline ring at the relative offset."""
         if self._canvas_widget is None:
             return
+        if not self.cursorOutlineCheck.isChecked():
+            # Outline switched off: skip all pixmap work and keep a plain
+            # crosshair so the paint position stays visible (Krita's native
+            # brush outline is suppressed while the brush is armed, so no
+            # cursor at all would leave the user pointing blind).
+            if self._cursor_sig != "outline-off":
+                self._cursor_sig = "outline-off"
+                self._canvas_widget.setCursor(QCursor(Qt.CrossCursor))
+            return
         canvas = self._currentCanvas()
         zoom = canvas.zoomLevel() if canvas else 1.0
         diameter = max(4, int(core.STATE.brush_size * zoom))
 
         offset = core.source_screen_offset(core.STATE, cursor_doc_pos, zoom)
         show_src = offset is not None
+
+        if show_src:
+            # Hoisted out of the paint block below so the change signature
+            # can see the refreshed cache timestamp; keeps the same
+            # fail-soft behavior the paint block's except clause provides.
+            try:
+                self._refreshPreviewCache(cursor_doc_pos, diameter)
+            except Exception as e:
+                _debug("_refreshPreviewCache error: %s\n%s"
+                       % (e, traceback.format_exc()), force=True)
+                self._preview_cache_image = None
+
+        # Rebuild the pixmap and swap the OS cursor only when something
+        # visible actually changed. During an Aligned drag the source
+        # offset is fixed, so between the ~5Hz preview refreshes every one
+        # of the 33Hz drag ticks used to rebuild a pixel-identical cursor
+        # -- pure wasted work, and each needless setCursor() swap is a
+        # chance for the OS cursor to visibly flicker. The pixmap is
+        # cursor-relative, so the hover position itself is not part of the
+        # signature; the OS moves the cursor image natively.
+        sig = (diameter,
+               int(offset[0]) if show_src else None,
+               int(offset[1]) if show_src else None,
+               core.STATE.brush_hardness,
+               self._preview_cache_time if show_src else None)
+        if sig == self._cursor_sig:
+            return
+        self._cursor_sig = sig
 
         half_ring = diameter // 2 + 2
         if show_src:
@@ -1024,10 +1156,8 @@ class ClonestampDocker(DockWidget):
             # history only validated this image-scaling cost at the 200ms
             # hover cadence; doing it at 33Hz was the likely cause of drag
             # lag. The cached frame is reused between recomputes.
-            if show_src:
-                self._refreshPreviewCache(cursor_doc_pos, diameter)
-                if self._preview_cache_image is not None:
-                    painter.drawImage(dl, dt, self._preview_cache_image)
+            if show_src and self._preview_cache_image is not None:
+                painter.drawImage(dl, dt, self._preview_cache_image)
 
             if core.STATE.brush_hardness < 1.0:
                 dcenter = half + 0.5

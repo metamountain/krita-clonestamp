@@ -74,7 +74,7 @@ def _debug(msg, force=False):
 SUPPORTED_COLOR_MODEL = "RGBA"
 SUPPORTED_COLOR_DEPTH = "U8"
 
-VERSION = "1.5.8"
+VERSION = "1.7.1"
 GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
 
 # Krita's default 8-bit RGBA layers store pixels as straight (non-premultiplied)
@@ -343,8 +343,10 @@ def _paint_dab_to_accumulator(state, dst_center, size, hardness, opacity_pct):
         return False
 
     half = size / 2.0
-    left = int(dst_center.x() - half)
-    top = int(dst_center.y() - half)
+    # round(), not int()-truncation, so dab placement matches the C++
+    # tool's qRound() and the two implementations stamp identically.
+    left = int(round(dst_center.x() - half))
+    top = int(round(dst_center.y() - half))
     dab_rect = QRect(left, top, size, size)
 
     if state._acc_bounds is None:

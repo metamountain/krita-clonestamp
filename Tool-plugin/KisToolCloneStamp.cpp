@@ -16,6 +16,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QSpinBox>
+#include <QSlider>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QSignalBlocker>
@@ -612,6 +613,18 @@ void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
         gc.drawEllipse(viewRect);
         gc.drawLine(QPointF(dstCenter.x() - dstCrossRadius, dstCenter.y()), QPointF(dstCenter.x() + dstCrossRadius, dstCenter.y()));
         gc.drawLine(QPointF(dstCenter.x(), dstCenter.y() - dstCrossRadius), QPointF(dstCenter.x(), dstCenter.y() + dstCrossRadius));
+
+        // Dashed inner ring marking the fully-hard zone of the brush --
+        // same readout the Python docker's cursor pixmap draws, so the two
+        // implementations look alike.
+        const qreal hardnessDiameter = qMax(qreal(3.0), viewRect.width() * m_brushHardness);
+        const qreal inset = (viewRect.width() - hardnessDiameter) / 2.0;
+        const QRectF hardRect(viewRect.x() + inset, viewRect.y() + inset,
+                              hardnessDiameter, hardnessDiameter);
+        gc.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt::DashLine));
+        gc.drawEllipse(hardRect.translated(1, 1));
+        gc.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt::DashLine));
+        gc.drawEllipse(hardRect);
         gc.restore();
     }
 
@@ -626,6 +639,10 @@ void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
         gc.setPen(QPen(QColor(255, 255, 255, 120), 1));
         gc.setBrush(Qt::NoBrush);
         gc.drawEllipse(srcViewRect);
+        // Red crosshair for the source point, matching the Python docker's
+        // cursor -- red keeps source and destination instantly
+        // distinguishable at a glance.
+        gc.setPen(QPen(QColor(255, 0, 0, 110), 2));
         gc.drawLine(QPointF(center.x() - crossRadius, center.y()), QPointF(center.x() + crossRadius, center.y()));
         gc.drawLine(QPointF(center.x(), center.y() - crossRadius), QPointF(center.x(), center.y() + crossRadius));
         gc.restore();
@@ -735,6 +752,10 @@ void KisToolCloneStamp::continueAlternateAction(KoPointerEvent *event, Alternate
             QSignalBlocker blocker(m_hardnessSpin);
             m_hardnessSpin->setValue(hardnessPercent);
         }
+        if (m_hardnessSlider) {
+            QSignalBlocker blocker(m_hardnessSlider);
+            m_hardnessSlider->setValue(hardnessPercent);
+        }
 
         updateOutline(m_hoverPoint);
         return;
@@ -777,16 +798,29 @@ QWidget *KisToolCloneStamp::createOptionWidget()
 
     QHBoxLayout *hardnessRow = new QHBoxLayout();
     hardnessRow->addWidget(new QLabel(i18n("Hardness:")));
+    // Slider + spinbox pair, same as the Python docker's hardness row.
+    QSlider *hardnessSlider = new QSlider(Qt::Horizontal);
+    hardnessSlider->setRange(0, 100);
+    hardnessSlider->setValue(qRound(m_brushHardness * 100));
+    hardnessRow->addWidget(hardnessSlider);
     QSpinBox *hardnessSpin = new QSpinBox();
     hardnessSpin->setRange(0, 100);
     hardnessSpin->setSuffix(i18n(" %"));
     hardnessSpin->setValue(qRound(m_brushHardness * 100));
-    connect(hardnessSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
+    connect(hardnessSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this, hardnessSlider](int value) {
         m_brushHardness = value / 100.0;
+        QSignalBlocker blocker(hardnessSlider);
+        hardnessSlider->setValue(value);
+    });
+    connect(hardnessSlider, &QSlider::valueChanged, this, [this, hardnessSpin](int value) {
+        m_brushHardness = value / 100.0;
+        QSignalBlocker blocker(hardnessSpin);
+        hardnessSpin->setValue(value);
     });
     hardnessRow->addWidget(hardnessSpin);
     layout->addLayout(hardnessRow);
     m_hardnessSpin = hardnessSpin;
+    m_hardnessSlider = hardnessSlider;
 
     QHBoxLayout *opacityRow = new QHBoxLayout();
     opacityRow->addWidget(new QLabel(i18n("Opacity:")));
