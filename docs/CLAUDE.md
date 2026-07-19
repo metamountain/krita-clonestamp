@@ -41,9 +41,16 @@ both, and each side's code comments cross-reference the other.
    it drives the updater *and* is the only reliable way to confirm which
    build a running Krita actually loaded (shown in the docker footer).
 3. **Rebuild `python-plugin/clonestamp.zip` before every push**: delete
-   it, then zip the *contents* of `python-plugin/clonestamp/` (flat, no
-   `__pycache__`) into it. The zip is tracked in git on purpose — it is
-   the download users install.
+   it, then from `python-plugin/` zip the **`clonestamp/` folder itself**
+   (`zip -r clonestamp.zip clonestamp -x "clonestamp/__pycache__/*"`).
+   The folder structure is load-bearing: Krita's plugin importer looks
+   for `clonestamp/__init__.py` *inside* the archive and reports "No
+   plugins found in archive" for a flat zip — this exact regression
+   shipped once (an earlier version of this rule said to zip the folder's
+   *contents*) and was only caught when a real zip import was attempted.
+   The zip is tracked in git on purpose — it is the download users
+   install. After changing it, verify with `unzip -l` that every entry
+   starts with `clonestamp/`.
 4. **Testing is manual.** There is no automated test suite; every change
    ships with a hands-on test recipe in
    `docs/change-report-2026-07-18.md` (append to it, same format). To
