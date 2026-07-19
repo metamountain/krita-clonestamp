@@ -91,9 +91,11 @@ because Qt/sip objects can already be deleted when callbacks fire.
   decoration.
 - **Python**: accumulator is whole-document sized (capped ~800 MB);
   dirty-bounds sizing is the known future optimization if the cap bites.
-- **Distribution**: the GitHub release (v1.0.0) is stale; the README
-  intentionally links to the tracked zip on `main` instead. Cutting fresh
-  releases per version would be nicer but requires keeping them updated.
+- **Distribution**: the canonical download is the tracked zip on `main`
+  (what the README links). GitHub releases are not maintained per version;
+  if one exists, it must match `main` or be deleted. Version numbering
+  was restarted at **1.0** on 2026-07-19 — the 1.x.y prototype history up
+  to 1.7.1 predates the restart (see the change report).
 
 ## History and deeper references
 

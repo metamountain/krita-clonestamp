@@ -74,7 +74,12 @@ def _debug(msg, force=False):
 SUPPORTED_COLOR_MODEL = "RGBA"
 SUPPORTED_COLOR_DEPTH = "U8"
 
-VERSION = "1.7.1"
+# Version numbering restarted at 1.0 on 2026-07-19 (the 1.x.y prototype
+# history up to 1.7.1 predates the restart -- see docs/change-report).
+# NOTE: installs still on a pre-restart version (>= 1.5) will NOT be
+# offered this as an update (the updater only upgrades to a numerically
+# newer version); they need one manual zip re-import.
+VERSION = "1.0"
 GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
 
 # Krita's default 8-bit RGBA layers store pixels as straight (non-premultiplied)

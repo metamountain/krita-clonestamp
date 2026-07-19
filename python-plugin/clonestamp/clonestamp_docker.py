@@ -407,15 +407,6 @@ class ClonestampDocker(DockWidget):
         self.brushStatusLabel.setWordWrap(True)
         layout.addWidget(self.brushStatusLabel)
 
-        resetButton = QPushButton("Reset (debug)")
-        resetButton.setToolTip(
-            "Forcibly tears down and re-syncs plugin state without "
-            "restarting Krita -- use if the brush gets stuck disabled, "
-            "stuck enabled but unresponsive, or shows a stale source after "
-            "switching documents.")
-        resetButton.clicked.connect(self._onResetClicked)
-        layout.addWidget(resetButton)
-
         aboutRow = QHBoxLayout()
         versionLabel = QLabel("v{0}".format(core.VERSION))
         aboutRow.addWidget(versionLabel)
@@ -584,54 +575,6 @@ class ClonestampDocker(DockWidget):
             self._arm()
         else:
             self._disarm()
-
-    def _onResetClicked(self):
-        """Debug/recovery tool, not part of the normal enable/disable flow:
-        forcibly tears down and clears all plugin state without needing to
-        restart Krita. Unlike _disarm(), which assumes it's running from a
-        cleanly-armed state, this is written to be safe to call from *any*
-        state, including a stuck/half-torn-down one -- e.g. if a prior
-        document-switch handler raised partway through and left
-        _canvas_widget pointing at an already-deleted widget. Every widget
-        touch is individually guarded so one already-dead object can't
-        stop the rest of the reset from completing, and it bypasses
-        enableCheck's toggled signal (blockSignals) rather than going
-        through onEnableToggled/_disarm -- calling back into the exact
-        code path that might be the reason something got stuck would
-        defeat the point of a recovery button.
-
-        Deliberately does NOT touch Krita's native brush-outline toggle
-        (see _toggleNativeBrushOutline) -- that's a blind toggle with no
-        "set to X" API, so calling it during an unknown/possibly-already-
-        wrong state has even odds of making it worse instead of better;
-        if that's visibly stuck after a reset, restarting Krita is the
-        only sure fix (see the README's documented limitation on this)."""
-        self._hover_timer.stop()
-        self._canvas_watch_timer.stop()
-        self._timer.stop()
-        if self._canvas_widget is not None:
-            try:
-                QApplication.instance().removeEventFilter(self)
-            except RuntimeError:
-                pass
-            try:
-                self._canvas_widget.unsetCursor()
-            except RuntimeError:
-                pass
-        self._teardownOverlays()
-        self._stroke_active = False
-        self._resize_active = False
-        self._canvas_widget = None
-        self._armed_doc_id = None
-        core.STATE.clear_source()
-        core.STATE.clear_accumulator()
-        self.liveSourceLabel.setText("Source: none")
-        self.enableCheck.blockSignals(True)
-        self.enableCheck.setChecked(False)
-        self.enableCheck.blockSignals(False)
-        self.brushStatusLabel.setText(
-            "Reset. Re-check “Enable Clone Brush” to start fresh.")
-        _debug("manual reset (debug button) triggered", force=True)
 
     def _arm(self):
         widget = _find_canvas_widget()
