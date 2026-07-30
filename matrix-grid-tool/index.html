@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Matrix Grid Tool</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1b1d22;
+    --panel: #24262d;
+    --panel-2: #2c2f38;
+    --border: #3a3d47;
+    --text: #e8e9ec;
+    --text-dim: #9aa0ac;
+    --accent: #5b8dff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px;
+  }
+  #app {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+  header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  header h1 {
+    font-size: 16px;
+    margin: 0;
+    font-weight: 600;
+  }
+  header .sub {
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  #stage {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    padding: 10px;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  #canvasWrap {
+    position: relative;
+    max-width: 100%;
+    line-height: 0;
+  }
+  #canvas {
+    max-width: 100%;
+    max-height: 46vh;
+    width: auto;
+    height: auto;
+    touch-action: none;
+    cursor: grab;
+    background: #fff;
+    display: block;
+    border: 1px solid var(--border);
+  }
+  #canvas.dragging { cursor: grabbing; }
+  #controls {
+    flex: 1 1 auto;
+    padding: 12px 14px 80px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  section.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  section.panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--text-dim);
+    margin: 0 0 10px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .row:last-child { margin-bottom: 0; }
+  .row label {
+    flex: 0 0 auto;
+    color: var(--text-dim);
+    font-size: 13px;
+    min-width: 90px;
+  }
+  select, input[type="number"], input[type="text"] {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 7px 8px;
+    font-size: 14px;
+  }
+  input[type="number"] { width: 84px; }
+  select { flex: 1 1 auto; min-width: 140px; }
+  button {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+  button.icon { padding: 6px 9px; }
+  input[type="range"] { flex: 1 1 auto; min-width: 90px; }
+  input[type="color"] {
+    width: 34px; height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: none;
+    padding: 0;
+  }
+  .swatches { display: flex; gap: 6px; }
+  .swatch {
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    border: 2px solid var(--border);
+    cursor: pointer;
+    padding: 0;
+  }
+  .swatch[data-c="#000000"] { background: #000; }
+  .swatch[data-c="#ffffff"] { background: #fff; }
+  .swatch[data-c="#808080"] { background: #808080; }
+
+  #layerList { display: flex; flex-direction: column; gap: 10px; }
+  .layer-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    background: var(--panel-2);
+  }
+  .layer-card.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+  .layer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .layer-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    flex: 1 1 auto;
+  }
+  .layer-title .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--text-dim);
+    flex: 0 0 auto;
+  }
+  .layer-card.active .layer-title .dot { background: var(--accent); }
+  .layer-title strong { font-size: 13px; }
+  .layer-btns { display: flex; gap: 4px; }
+  .layer-btns button { padding: 5px 8px; font-size: 12px; }
+  .hint {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-top: 4px;
+  }
+  footer {
+    padding: 10px 14px 20px;
+    color: var(--text-dim);
+    font-size: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  @media (min-width: 900px) {
+    #app { flex-direction: row; }
+    #stage {
+      position: static;
+      flex: 1 1 auto;
+      height: 100vh;
+      order: 2;
+    }
+    #canvas { max-height: 90vh; }
+    #controls {
+      order: 1;
+      width: 380px;
+      flex: 0 0 380px;
+      height: 100vh;
+      overflow-y: auto;
+      padding-bottom: 30px;
+      border-right: 1px solid var(--border);
+    }
+    header { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div>
+      <h1>Matrix Grid Tool</h1>
+      <div class="sub">Grid-Referenzbilder für KI-Bildgenerierung</div>
+    </div>
+  </header>
+
+  <div id="stage">
+    <div id="canvasWrap">
+      <canvas id="canvas"></canvas>
+    </div>
+  </div>
+
+  <div id="controls">
+
+    <section class="panel">
+      <h2>Auflösung</h2>
+      <div class="row">
+        <label for="presetSelect">Preset</label>
+        <select id="presetSelect"></select>
+      </div>
+      <div class="row">
+        <label>Breite</label>
+        <input type="number" id="widthInput" min="16" max="8000" step="1">
+        <label style="min-width:auto;">Höhe</label>
+        <input type="number" id="heightInput" min="16" max="8000" step="1">
+      </div>
+      <div class="row">
+        <button id="swapOrientation">⇄ Hoch-/Querformat tauschen</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Hintergrund</h2>
+      <div class="row">
+        <label>Farbe</label>
+        <div class="swatches">
+          <button class="swatch" data-c="#ffffff" title="Weiß"></button>
+          <button class="swatch" data-c="#000000" title="Schwarz"></button>
+          <button class="swatch" data-c="#808080" title="Grau"></button>
+        </div>
+        <input type="color" id="bgColor" value="#ffffff">
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Ebenen</h2>
+      <div id="layerList"></div>
+      <div class="row" style="margin-top:10px;">
+        <button id="addLayer">+ Ebene hinzufügen</button>
+      </div>
+      <div class="hint">Aktive Ebene (blau markiert) lässt sich per Drag direkt in der Vorschau verschieben.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Export</h2>
+      <div class="row">
+        <label>JPEG-Qualität</label>
+        <input type="range" id="quality" min="0.5" max="1" step="0.01" value="0.92">
+        <span id="qualityVal" style="min-width:34px; text-align:right; color:var(--text-dim); font-size:12px;">92%</span>
+      </div>
+      <div class="row">
+        <button id="exportBtn" class="primary" style="width:100%;">Als JPEG exportieren</button>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<footer>Läuft komplett lokal im Browser, keine Uploads. Zum dauerhaften Nutzen diese Datei speichern/bookmarken.</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  const PRESETS = [
+    { name: "5:4 – Standard (1536×1920)", w: 1536, h: 1920 },
+    { name: "4:3 (1440×1920)",            w: 1440, h: 1920 },
+    { name: "16:9 (1920×1080)",           w: 1920, h: 1080 },
+    { name: "1:1 (1920×1920)",            w: 1920, h: 1920 },
+    { name: "3:2 (1280×1920)",            w: 1280, h: 1920 },
+    { name: "21:9 (2560×1080)",           w: 2560, h: 1080 },
+    { name: "Custom",                     w: null, h: null },
+  ];
+
+  let layerSeq = 0;
+  function makeLayer(orientation, cellSize) {
+    layerSeq += 1;
+    return {
+      id: "l" + layerSeq,
+      orientation: orientation,      // 'horizontal' | 'vertical'
+      cellSize: cellSize,
+      lineWidth: 3,
+      color: "#000000",
+      opacity: 100,
+      offsetX: 0,
+      offsetY: 0,
+      visible: true,
+    };
+  }
+
+  const state = {
+    width: PRESETS[0].w,
+    height: PRESETS[0].h,
+    bgColor: "#ffffff",
+    // list order = z-order; index 0 is drawn LAST (topmost).
+    layers: [makeLayer("vertical", 160), makeLayer("horizontal", 160)],
+    activeLayerId: null,
+  };
+  state.activeLayerId = state.layers[0].id;
+
+  function mod(n, m) { return ((n % m) + m) % m; }
+
+  // ---------- DOM refs ----------
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const presetSelect = document.getElementById("presetSelect");
+  const widthInput = document.getElementById("widthInput");
+  const heightInput = document.getElementById("heightInput");
+  const swapBtn = document.getElementById("swapOrientation");
+  const bgColorInput = document.getElementById("bgColor");
+  const layerListEl = document.getElementById("layerList");
+  const addLayerBtn = document.getElementById("addLayer");
+  const qualityInput = document.getElementById("quality");
+  const qualityVal = document.getElementById("qualityVal");
+  const exportBtn = document.getElementById("exportBtn");
+
+  // ---------- Presets ----------
+  PRESETS.forEach((p, i) => {
+    const opt = document.createElement("option");
+    opt.value = i;
+    opt.textContent = p.name;
+    presetSelect.appendChild(opt);
+  });
+  presetSelect.value = "0";
+
+  function applyPreset(index) {
+    const p = PRESETS[index];
+    if (p.w == null) return; // Custom: leave current width/height as-is
+    state.width = p.w;
+    state.height = p.h;
+    syncResolutionInputs();
+    resizeCanvas();
+    render();
+  }
+
+  function syncResolutionInputs() {
+    widthInput.value = state.width;
+    heightInput.value = state.height;
+  }
+
+  function markCustomPreset() {
+    const opts = presetSelect.options;
+    presetSelect.value = opts[opts.length - 1].value; // "Custom"
+  }
+
+  presetSelect.addEventListener("change", () => applyPreset(Number(presetSelect.value)));
+
+  function clampDim(v) {
+    v = Math.round(Number(v));
+    if (!isFinite(v) || v < 16) v = 16;
+    if (v > 8000) v = 8000;
+    return v;
+  }
+
+  widthInput.addEventListener("change", () => {
+    state.width = clampDim(widthInput.value);
+    syncResolutionInputs();
+    markCustomPreset();
+    resizeCanvas();
+    render();
+  });
+  heightInput.addEventListener("change", () => {
+    state.height = clampDim(heightInput.value);
+    syncResolutionInputs();
+    markCustomPreset();
+    resizeCanvas();
+    render();
+  });
+
+  swapBtn.addEventListener("click", () => {
+    const w = state.width;
+    state.width = state.height;
+    state.height = w;
+    syncResolutionInputs();
+    markCustomPreset();
+    resizeCanvas();
+    render();
+  });
+
+  // ---------- Background ----------
+  bgColorInput.addEventListener("input", () => {
+    state.bgColor = bgColorInput.value;
+    render();
+  });
+  document.querySelectorAll(".swatch").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.bgColor = btn.dataset.c;
+      bgColorInput.value = state.bgColor;
+      render();
+    });
+  });
+
+  // ---------- Layers ----------
+  function getLayer(id) { return state.layers.find((l) => l.id === id); }
+
+  function addLayer() {
+    const layer = makeLayer("horizontal", 160);
+    state.layers.unshift(layer); // new layer goes on top
+    state.activeLayerId = layer.id;
+    renderLayerList();
+    render();
+  }
+
+  function removeLayer(id) {
+    if (state.layers.length <= 1) return;
+    const idx = state.layers.findIndex((l) => l.id === id);
+    if (idx === -1) return;
+    state.layers.splice(idx, 1);
+    if (state.activeLayerId === id) {
+      state.activeLayerId = state.layers[0].id;
+    }
+    renderLayerList();
+    render();
+  }
+
+  function moveLayer(id, dir) {
+    const idx = state.layers.findIndex((l) => l.id === id);
+    const target = idx + dir;
+    if (idx === -1 || target < 0 || target >= state.layers.length) return;
+    const [l] = state.layers.splice(idx, 1);
+    state.layers.splice(target, 0, l);
+    renderLayerList();
+    render();
+  }
+
+  function renderLayerList() {
+    layerListEl.innerHTML = "";
+    state.layers.forEach((layer, idx) => {
+      const card = document.createElement("div");
+      card.className = "layer-card" + (layer.id === state.activeLayerId ? " active" : "");
+
+      const head = document.createElement("div");
+      head.className = "layer-head";
+
+      const title = document.createElement("div");
+      title.className = "layer-title";
+      title.innerHTML =
+        '<span class="dot"></span><strong>' +
+        (layer.orientation === "horizontal" ? "Horizontal" : "Vertikal") +
+        "</strong>";
+      title.addEventListener("click", () => {
+        state.activeLayerId = layer.id;
+        renderLayerList();
+      });
+
+      const btns = document.createElement("div");
+      btns.className = "layer-btns";
+      const upBtn = mkIconBtn("▲", () => moveLayer(layer.id, -1));
+      const downBtn = mkIconBtn("▼", () => moveLayer(layer.id, 1));
+      const delBtn = mkIconBtn("✕", () => removeLayer(layer.id));
+      btns.append(upBtn, downBtn, delBtn);
+
+      head.append(title, btns);
+      card.appendChild(head);
+
+      card.appendChild(
+        fieldRow("Ausrichtung", selectInput(
+          [["horizontal", "Horizontal"], ["vertical", "Vertikal"]],
+          layer.orientation,
+          (v) => { layer.orientation = v; renderLayerList(); render(); }
+        ))
+      );
+
+      card.appendChild(
+        fieldRow("Zellgröße", numberInput(layer.cellSize, 4, 4000, (v) => {
+          layer.cellSize = Math.max(4, Math.round(v));
+          render();
+        }))
+      );
+
+      card.appendChild(
+        fieldRow("Linienbreite", numberInput(layer.lineWidth, 1, 200, (v) => {
+          layer.lineWidth = Math.max(1, Math.round(v));
+          render();
+        }))
+      );
+
+      const colorRow = document.createElement("div");
+      colorRow.className = "row";
+      const colorLabel = document.createElement("label");
+      colorLabel.textContent = "Farbe";
+      colorRow.appendChild(colorLabel);
+      const sw = document.createElement("div");
+      sw.className = "swatches";
+      ["#000000", "#ffffff", "#808080"].forEach((c) => {
+        const b = document.createElement("button");
+        b.className = "swatch";
+        b.dataset.c = c;
+        b.addEventListener("click", () => { layer.color = c; colorPicker.value = c; render(); });
+        sw.appendChild(b);
+      });
+      colorRow.appendChild(sw);
+      const colorPicker = document.createElement("input");
+      colorPicker.type = "color";
+      colorPicker.value = layer.color;
+      colorPicker.addEventListener("input", () => { layer.color = colorPicker.value; render(); });
+      colorRow.appendChild(colorPicker);
+      card.appendChild(colorRow);
+
+      const opRow = document.createElement("div");
+      opRow.className = "row";
+      const opLabel = document.createElement("label");
+      opLabel.textContent = "Deckkraft";
+      const opRange = document.createElement("input");
+      opRange.type = "range";
+      opRange.min = 0; opRange.max = 100; opRange.value = layer.opacity;
+      const opVal = document.createElement("span");
+      opVal.style.minWidth = "36px";
+      opVal.style.fontSize = "12px";
+      opVal.style.color = "var(--text-dim)";
+      opVal.textContent = layer.opacity + "%";
+      opRange.addEventListener("input", () => {
+        layer.opacity = Number(opRange.value);
+        opVal.textContent = layer.opacity + "%";
+        render();
+      });
+      opRow.append(opLabel, opRange, opVal);
+      card.appendChild(opRow);
+
+      const offRow = document.createElement("div");
+      offRow.className = "row";
+      const offLabel = document.createElement("label");
+      offLabel.textContent = "Offset X/Y";
+      const offX = document.createElement("input");
+      offX.type = "number";
+      offX.value = Math.round(layer.offsetX);
+      offX.addEventListener("change", () => { layer.offsetX = Number(offX.value) || 0; render(); });
+      const offY = document.createElement("input");
+      offY.type = "number";
+      offY.value = Math.round(layer.offsetY);
+      offY.addEventListener("change", () => { layer.offsetY = Number(offY.value) || 0; render(); });
+      offRow.append(offLabel, offX, offY);
+      card.appendChild(offRow);
+      layer._offXInput = offX;
+      layer._offYInput = offY;
+
+      const visRow = document.createElement("div");
+      visRow.className = "row";
+      const visLabel = document.createElement("label");
+      visLabel.textContent = "Sichtbar";
+      const visCb = document.createElement("input");
+      visCb.type = "checkbox";
+      visCb.checked = layer.visible;
+      visCb.addEventListener("change", () => { layer.visible = visCb.checked; render(); });
+      visRow.append(visLabel, visCb);
+      card.appendChild(visRow);
+
+      layerListEl.appendChild(card);
+    });
+  }
+
+  function mkIconBtn(label, onClick) {
+    const b = document.createElement("button");
+    b.className = "icon";
+    b.textContent = label;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+  function fieldRow(labelText, inputEl) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const label = document.createElement("label");
+    label.textContent = labelText;
+    row.append(label, inputEl);
+    return row;
+  }
+  function selectInput(options, value, onChange) {
+    const sel = document.createElement("select");
+    options.forEach(([v, text]) => {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = text;
+      if (v === value) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", () => onChange(sel.value));
+    return sel;
+  }
+  function numberInput(value, min, max, onChange) {
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.min = min; inp.max = max;
+    inp.value = value;
+    inp.addEventListener("change", () => onChange(Number(inp.value)));
+    return inp;
+  }
+
+  addLayerBtn.addEventListener("click", addLayer);
+
+  // ---------- Rendering ----------
+  function resizeCanvas() {
+    canvas.width = state.width;
+    canvas.height = state.height;
+  }
+
+  function drawLayer(layer) {
+    if (!layer.visible || layer.cellSize <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity / 100));
+    ctx.strokeStyle = layer.color;
+    ctx.lineWidth = layer.lineWidth;
+    ctx.beginPath();
+    if (layer.orientation === "horizontal") {
+      const start = mod(layer.offsetY, layer.cellSize) - layer.cellSize;
+      for (let y = start; y <= state.height + layer.cellSize; y += layer.cellSize) {
+        ctx.moveTo(0, y + 0.5);
+        ctx.lineTo(state.width, y + 0.5);
+      }
+    } else {
+      const start = mod(layer.offsetX, layer.cellSize) - layer.cellSize;
+      for (let x = start; x <= state.width + layer.cellSize; x += layer.cellSize) {
+        ctx.moveTo(x + 0.5, 0);
+        ctx.lineTo(x + 0.5, state.height);
+      }
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function render() {
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = state.bgColor;
+    ctx.fillRect(0, 0, state.width, state.height);
+    ctx.restore();
+    // list order = z-order; last item in array is drawn first (bottom),
+    // first item drawn last (top).
+    for (let i = state.layers.length - 1; i >= 0; i -= 1) {
+      drawLayer(state.layers[i]);
+    }
+  }
+
+  // ---------- Drag-to-move active layer on canvas ----------
+  let dragState = null;
+
+  function canvasCoords(evt) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (evt.clientX - rect.left) * scaleX,
+      y: (evt.clientY - rect.top) * scaleY,
+    };
+  }
+
+  canvas.addEventListener("pointerdown", (evt) => {
+    const layer = getLayer(state.activeLayerId);
+    if (!layer) return;
+    canvas.setPointerCapture(evt.pointerId);
+    canvas.classList.add("dragging");
+    const p = canvasCoords(evt);
+    dragState = {
+      pointerId: evt.pointerId,
+      startX: p.x,
+      startY: p.y,
+      offsetX0: layer.offsetX,
+      offsetY0: layer.offsetY,
+    };
+    evt.preventDefault();
+  });
+
+  canvas.addEventListener("pointermove", (evt) => {
+    if (!dragState || evt.pointerId !== dragState.pointerId) return;
+    const layer = getLayer(state.activeLayerId);
+    if (!layer) return;
+    const p = canvasCoords(evt);
+    const dx = p.x - dragState.startX;
+    const dy = p.y - dragState.startY;
+    layer.offsetX = dragState.offsetX0 + dx;
+    layer.offsetY = dragState.offsetY0 + dy;
+    if (layer._offXInput) layer._offXInput.value = Math.round(layer.offsetX);
+    if (layer._offYInput) layer._offYInput.value = Math.round(layer.offsetY);
+    render();
+    evt.preventDefault();
+  });
+
+  function endDrag(evt) {
+    if (!dragState || (evt.pointerId !== undefined && evt.pointerId !== dragState.pointerId)) return;
+    const layer = getLayer(state.activeLayerId);
+    if (layer && layer.cellSize > 0) {
+      // normalize into [0, cellSize) so the number fields stay readable
+      layer.offsetX = mod(layer.offsetX, layer.cellSize);
+      layer.offsetY = mod(layer.offsetY, layer.cellSize);
+      if (layer._offXInput) layer._offXInput.value = Math.round(layer.offsetX);
+      if (layer._offYInput) layer._offYInput.value = Math.round(layer.offsetY);
+    }
+    dragState = null;
+    canvas.classList.remove("dragging");
+    render();
+  }
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
+  // ---------- Export ----------
+  qualityInput.addEventListener("input", () => {
+    qualityVal.textContent = Math.round(Number(qualityInput.value) * 100) + "%";
+  });
+
+  exportBtn.addEventListener("click", () => {
+    render();
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "matrix-grid-" + state.width + "x" + state.height + ".jpg";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }, "image/jpeg", Number(qualityInput.value));
+  });
+
+  // ---------- Init ----------
+  syncResolutionInputs();
+  resizeCanvas();
+  renderLayerList();
+  render();
+})();
+</script>
+</body>
+</html>
