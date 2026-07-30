@@ -213,6 +213,12 @@
     font-size: 12px;
     margin-top: 4px;
   }
+  /* The 808 jam surface: highlighted, bigger sliders */
+  section.panel.jam {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(91,141,255,.25) inset;
+  }
+  section.panel.jam input[type="range"] { height: 22px; }
   /* Collapsible base-settings group */
   details.fold {
     background: var(--panel);
@@ -293,18 +299,46 @@
 
     <!-- ===== MODIFIKATOREN (Hauptfokus) ===== -->
 
-    <section class="panel">
-      <h2>Physik &amp; Animation</h2>
-      <div class="row">
-        <button id="playBtn" class="primary" style="min-width:120px;">⏸ Pause</button>
-        <label style="min-width:auto;">Tempo</label>
-        <input type="range" id="animSpeed" min="0" max="4" step="0.05" value="1">
-        <span id="animSpeedVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">1.0×</span>
+    <section class="panel jam">
+      <h2>Jam (808)</h2>
+      <div class="row" style="gap:6px;">
+        <button id="playBtn" class="primary" style="flex:1 1 auto;">⏸ Pause</button>
+        <button id="kickBtn" title="Anstoßen" style="flex:0 0 auto;">💥</button>
+        <button id="randomBtn" title="Neu würfeln" style="flex:0 0 auto;">🎲</button>
       </div>
+      <div class="row">
+        <label>Geschwindigkeit</label>
+        <input type="range" id="animSpeed" min="0" max="6" step="0.05" value="1">
+        <span id="animSpeedVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">1.0×</span>
+      </div>
+      <div class="row">
+        <label>Kraftfeld</label>
+        <input type="range" id="physRepulsion" min="0" max="40" step="0.5" value="16">
+        <span id="physRepulsionVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">16</span>
+      </div>
+      <div class="row">
+        <label>H-Ebenen</label>
+        <input type="range" id="jamHCount" min="0" max="20" step="1" value="10">
+        <span id="jamHCountVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">10</span>
+      </div>
+      <div class="row">
+        <label>V-Ebenen</label>
+        <input type="range" id="jamVCount" min="0" max="12" step="1" value="0">
+        <span id="jamVCountVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">0</span>
+      </div>
+      <div class="row">
+        <label>Farbe</label>
+        <input type="range" id="jamHue" min="0" max="360" step="1" value="0">
+        <span id="jamHueVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">0°</span>
+      </div>
+      <div class="hint">Drehen für Chaos: Geschwindigkeit &amp; Kraftfeld treiben die Physik, H-/V-Ebenen spawnen bzw. entfernen Ebenen live, Farbe dreht die ganze Palette. 💥 anstoßen · 🎲 neu würfeln.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Physik (fein)</h2>
       <div class="row">
         <label>Physik an</label>
         <input type="checkbox" id="physOn" checked>
-        <button id="kickBtn" style="margin-left:auto;">💥 Anstoßen</button>
       </div>
       <div class="row">
         <label>Dichte</label>
@@ -317,27 +351,21 @@
         <span id="physGravityVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">6</span>
       </div>
       <div class="row">
-        <label>Abstoßung</label>
-        <input type="range" id="physRepulsion" min="0" max="40" step="0.5" value="16">
-        <span id="physRepulsionVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">16</span>
-      </div>
-      <div class="row">
         <label>Dämpfung</label>
         <input type="range" id="physDamping" min="0.2" max="4" step="0.1" value="1.6">
         <span id="physDampingVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">1.6</span>
       </div>
-      <div class="hint">Die horizontalen Ebenen sind ein physischer Stapel: Gravitation zieht nach unten, Abstoßung drückt auseinander, Dichte bestimmt den Ruheabstand. 💥 stößt an. Läuft nur bei aktiver Animation.</div>
+      <div class="hint">Feinabstimmung des Stapels: Gravitation zieht nach unten, Kraftfeld (oben) drückt auseinander, Dichte = Ruheabstand, Dämpfung = wie schnell es sich beruhigt.</div>
     </section>
 
     <section class="panel">
       <h2>Ebenen</h2>
       <div class="row" style="margin-bottom:8px; gap:6px;">
         <button id="addLayer" class="primary" style="flex:1 1 auto;">+ Ebene</button>
-        <button id="randomBtn" title="Viele zufällige Ebenen" style="flex:0 0 auto;">🎲 Zufall</button>
         <button id="clearBtn" title="Bis auf eine Ebene leeren" style="flex:0 0 auto;">🗑</button>
       </div>
       <div id="layerList"></div>
-      <div class="hint">Tippe eine Zeile an, um sie unten zu bearbeiten. 👁 blendet einzeln ein/aus. 🎲 würfelt viele Ebenen auf einmal.</div>
+      <div class="hint">Tippe eine Zeile an, um sie unten zu bearbeiten. 👁 blendet einzeln ein/aus.</div>
     </section>
 
     <section class="panel">
@@ -517,6 +545,7 @@
     // Physics for the horizontal-plane stack: gravity pulls planes down,
     // repulsion spaces them out, density sets the rest gap between them.
     physics: { enabled: true, density: 0.5, gravity: 6, repulsion: 16, damping: 1.6 },
+    jam: { hue: 0 }, // global hue rotation applied to all layer colours
     clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).
     layers: makeStack(10),
@@ -527,6 +556,60 @@
   function mod(n, m) { return ((n % m) + m) % m; }
   function lerp(a, b, t) { return a + (b - a) * t; }
   let editorTitleEl = null; // live-updated title of the active-layer editor
+
+  // --- colour helpers for the global hue dial ---
+  function hexToRgb(hex) {
+    hex = hex.replace("#", "");
+    if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+    const n = parseInt(hex, 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    let h, s; const l = (mx + mn) / 2;
+    if (mx === mn) { h = 0; s = 0; }
+    else {
+      const d = mx - mn;
+      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+      if (mx === r) h = (g - b) / d + (g < b ? 6 : 0);
+      else if (mx === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h /= 6;
+    }
+    return [h, s, l];
+  }
+  function hslToRgb(h, s, l) {
+    let r, g, b;
+    if (s === 0) { r = g = b = l; }
+    else {
+      const hue2rgb = (p, q, t) => {
+        if (t < 0) t += 1; if (t > 1) t -= 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t;
+        if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+        return p;
+      };
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      r = hue2rgb(p, q, h + 1 / 3); g = hue2rgb(p, q, h); b = hue2rgb(p, q, h - 1 / 3);
+    }
+    return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+  }
+  function rgbToHex(r, g, b) {
+    return "#" + [r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  // Rotate a colour's hue by `deg`. Greys (s≈0: white/black) are unaffected,
+  // so the white base grid stays white while coloured layers cycle.
+  function shiftHue(hex, deg) {
+    if (!deg) return hex;
+    try {
+      const { r, g, b } = hexToRgb(hex);
+      const [h, s, l] = rgbToHsl(r, g, b);
+      const c = hslToRgb(mod(h + deg / 360, 1), s, l);
+      return rgbToHex(c.r, c.g, c.b);
+    } catch (e) { return hex; }
+  }
 
   // ---------- DOM refs ----------
   const canvas = document.getElementById("canvas");
@@ -562,6 +645,78 @@
   const physRepulsionVal = document.getElementById("physRepulsionVal");
   const physDampingInput = document.getElementById("physDamping");
   const physDampingVal = document.getElementById("physDampingVal");
+  const jamHCountInput = document.getElementById("jamHCount");
+  const jamHCountVal = document.getElementById("jamHCountVal");
+  const jamVCountInput = document.getElementById("jamVCount");
+  const jamVCountVal = document.getElementById("jamVCountVal");
+  const jamHueInput = document.getElementById("jamHue");
+  const jamHueVal = document.getElementById("jamHueVal");
+
+  // ---------- Jam (808) controls ----------
+  // H-/V-Ebenen dials spawn or remove layers of a type live; Farbe rotates
+  // the whole palette. (Geschwindigkeit=animSpeed, Kraftfeld=repulsion are
+  // wired below with the other physics/anim controls.)
+  function countType(t) { return state.layers.filter((l) => l.type === t).length; }
+  function syncJamCounts() {
+    if (!jamHCountInput) return;
+    const h = countType("hplane"), v = countType("wall");
+    jamHCountInput.value = h; jamHCountVal.textContent = h;
+    jamVCountInput.value = v; jamVCountVal.textContent = v;
+  }
+  function spawnLayer(type) {
+    const idx = state.layers.length;
+    const s = autoStyle(idx);
+    const ov = { color: s.color, opacity: s.opacity, flowSpeed: +rnd(1.5, 7).toFixed(1),
+      cellM: pick([0.5, 1, 1, 2]) };
+    if (type === "hplane") ov.elevation = +rnd(0, 8).toFixed(1);
+    if (type === "wall") {
+      ov.distance = +rnd(2, 12).toFixed(1); ov.heightM = +rnd(2, 5).toFixed(1);
+      ov.widthM = +rnd(4, 10).toFixed(1);
+    }
+    if (chance(0.35)) {
+      ov.accentEvery = pick([2, 3, 4]);
+      ov.accentMode = chance(0.5) ? "lines" : "cells";
+      ov.accentColor = pick(LAYER_HUES.concat(["#ffffff", "#ff3355"]));
+    }
+    state.layers.unshift(makeLayer(type, ov));
+  }
+  function setTypeCount(type, n) {
+    n = Math.max(0, Math.round(n));
+    let cur = countType(type);
+    while (cur < n) { spawnLayer(type); cur += 1; }
+    if (cur > n) {
+      let toRemove = cur - n;
+      for (let i = 0; i < state.layers.length && toRemove > 0;) {
+        if (state.layers[i].type === type) {
+          const rem = state.layers.splice(i, 1)[0];
+          if (state.activeLayerId === rem.id) state.activeLayerId = null;
+          toRemove -= 1;
+        } else i += 1;
+      }
+    }
+    if (!getLayer(state.activeLayerId)) {
+      state.activeLayerId = state.layers.length ? state.layers[0].id : null;
+    }
+    renderLayerList();
+    renderActiveEditor();
+    render();
+  }
+  jamHCountInput.addEventListener("input", () => {
+    jamHCountVal.textContent = jamHCountInput.value;
+    setTypeCount("hplane", Number(jamHCountInput.value));
+  });
+  jamVCountInput.addEventListener("input", () => {
+    jamVCountVal.textContent = jamVCountInput.value;
+    setTypeCount("wall", Number(jamVCountInput.value));
+  });
+  jamHueInput.addEventListener("input", () => {
+    state.jam.hue = Number(jamHueInput.value);
+    jamHueVal.textContent = state.jam.hue + "°";
+    for (const l of state.layers) { // update chips without rebuilding the list
+      if (l._chipEl) l._chipEl.style.background = shiftHue(l.color, state.jam.hue);
+    }
+    if (!state.anim.playing) render();
+  });
 
   // ---------- Physics controls ----------
   physOnInput.addEventListener("change", () => {
@@ -908,7 +1063,7 @@
 
       const chip = document.createElement("span");
       chip.className = "chip";
-      chip.style.background = layer.color;
+      chip.style.background = shiftHue(layer.color, state.jam.hue);
       layer._chipEl = chip;
 
       const name = document.createElement("span");
@@ -938,6 +1093,7 @@
       row.append(chip, name, eye);
       layerListEl.appendChild(row);
     });
+    syncJamCounts();
   }
 
   // Full editor for the currently active layer only.
@@ -1292,8 +1448,8 @@
         (N && mod(i, N) === 0 ? acc : base).push([x + 0.5, 0, x + 0.5, state.height]);
       }
     }
-    strokeSegs(base, layer.color, layer.lineWidth, alpha);
-    if (N) strokeSegs(acc, layer.accentColor, layer.lineWidth, clamp01(layer.accentOpacity / 100));
+    strokeSegs(base, shiftHue(layer.color, state.jam.hue), layer.lineWidth, alpha);
+    if (N) strokeSegs(acc, shiftHue(layer.accentColor, state.jam.hue), layer.lineWidth, clamp01(layer.accentOpacity / 100));
   }
 
   function drawHPlane(layer, alpha) {
@@ -1335,9 +1491,9 @@
         }
       }
     }
-    if (cellsMode) fillQuads(quads, layer.accentColor, clamp01(layer.accentOpacity / 100));
-    strokeSegs(base, layer.color, layer.lineWidth, alpha);
-    if (linesMode) strokeSegs(acc, layer.accentColor, layer.lineWidth, clamp01(layer.accentOpacity / 100));
+    if (cellsMode) fillQuads(quads, shiftHue(layer.accentColor, state.jam.hue), clamp01(layer.accentOpacity / 100));
+    strokeSegs(base, shiftHue(layer.color, state.jam.hue), layer.lineWidth, alpha);
+    if (linesMode) strokeSegs(acc, shiftHue(layer.accentColor, state.jam.hue), layer.lineWidth, clamp01(layer.accentOpacity / 100));
   }
 
   function drawWall(layer, alpha) {
@@ -1379,9 +1535,9 @@
         }
       }
     }
-    if (cellsMode) fillQuads(quads, layer.accentColor, clamp01(layer.accentOpacity / 100));
-    strokeSegs(base, layer.color, layer.lineWidth, alpha);
-    if (linesMode) strokeSegs(acc, layer.accentColor, layer.lineWidth, clamp01(layer.accentOpacity / 100));
+    if (cellsMode) fillQuads(quads, shiftHue(layer.accentColor, state.jam.hue), clamp01(layer.accentOpacity / 100));
+    strokeSegs(base, shiftHue(layer.color, state.jam.hue), layer.lineWidth, alpha);
+    if (linesMode) strokeSegs(acc, shiftHue(layer.accentColor, state.jam.hue), layer.lineWidth, clamp01(layer.accentOpacity / 100));
   }
 
   function render() {

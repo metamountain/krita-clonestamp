@@ -15,12 +15,23 @@ the same repo.
 Open `index.html` directly in any modern browser (desktop or mobile —
 works fine over `file://`, no server or install required).
 
-The UI puts the **modifiers first**: **Physik & Animation** and the
-**Ebenen** list/editor are the main workspace at the top. The rarely-changed
-base settings (Auflösung, Kamera, Hintergrund) are folded away in the
-collapsible **Grundeinstellungen** section near the bottom — the defaults
-are fine for most work. The tool opens on a **10-plane stack**; **🎲 Zufall**
-rolls a whole batch of random layers at once, and **🗑** clears back to one.
+The UI is built like a **TR-808-style jam surface** — a row of performance
+dials you scrub for instant, chaotic results:
+
+- **Geschwindigkeit** — global animation speed.
+- **Kraftfeld** — the physics repulsion; turn it up for explosive chaos,
+  down (Reduktion) and the stack collapses.
+- **H-Ebenen / V-Ebenen** — spawn or remove horizontal planes / vertical
+  walls *live* as you turn the dial.
+- **Farbe** — rotates the hue of the whole palette (the white base grid
+  stays white; coloured layers cycle).
+- **▶/⏸**, **💥 Anstoßen** (kick the stack), **🎲** (re-roll a whole batch).
+
+Below the jam surface: a **Physik (fein)** panel (Dichte, Gravitation,
+Dämpfung), the **Ebenen** list/editor, and — folded away in the collapsible
+**Grundeinstellungen** section — the rarely-changed base settings
+(Auflösung, Kamera, Hintergrund), whose defaults are fine for most work.
+The tool opens on a **10-plane stack**; **🗑** clears back to one.
 
 1. **Auflösung**: pick a resolution preset (default 5:4 portrait,
    1536×1920) or type a custom width/height. The swap button flips
