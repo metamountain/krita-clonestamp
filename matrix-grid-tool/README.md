@@ -19,8 +19,9 @@ The UI is built like a **TR-808-style jam surface** — a row of performance
 dials you scrub for instant, chaotic results:
 
 - **Geschwindigkeit** — global animation speed.
-- **Kraftfeld** — the physics repulsion; turn it up for explosive chaos,
-  down (Reduktion) and the stack collapses.
+- **Kraftfeld** — the plane density/spacing: turn it up and the planes
+  spread apart, down and they spring/settle together ("einfedern"). A
+  constant spring stiffness makes them bounce into the new spacing.
 - **H-Ebenen / V-Ebenen** — spawn or remove horizontal planes / vertical
   walls *live* as you turn the dial.
 - **Farbe** — rotates the hue of the whole palette (the white base grid
