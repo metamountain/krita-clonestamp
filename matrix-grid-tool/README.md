@@ -37,7 +37,9 @@ works fine over `file://`, no server or install required).
    the animated floor. Click **+ Ebene hinzufügen** to add more; new
    planes are placed higher and **auto-coloured sensibly** (the base grid
    is white; further/higher planes take a soft hue and fade to be more
-   subtle). Each layer has line width, color, opacity, motion, an accent
+   subtle). **🎲 Zufall** rolls a whole new random constellation (camera,
+   layers, colours, motion, accents) — keep clicking to try out different
+   looks. Each layer has line width, color, opacity, motion, an accent
    (below), and can be shown/hidden; list order is the stacking order (top
    card drawn last). Click a layer card to make it the *active* layer.
    Each layer's **Typ**:

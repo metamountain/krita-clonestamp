@@ -302,10 +302,11 @@
     <section class="panel">
       <h2>Ebenen</h2>
       <div id="layerList"></div>
-      <div class="row" style="margin-top:10px;">
-        <button id="addLayer" class="primary" style="width:100%;">+ Ebene hinzufügen</button>
+      <div class="row" style="margin-top:10px; gap:6px;">
+        <button id="addLayer" class="primary" style="flex:1 1 auto;">+ Ebene hinzufügen</button>
+        <button id="randomBtn" title="Zufällige Konstellation" style="flex:0 0 auto;">🎲 Zufall</button>
       </div>
-      <div class="hint">Neue Ebenen bekommen automatisch eine passende Farbe (Basisgitter weiß, höhere/weiter entfernte Gitter dezenter). Klick auf eine Ebene macht sie aktiv (blau). Flache "Parallel"-Ebenen lassen sich per Drag verschieben; Perspektiv-Ebenen werden über ihre Meter-Felder gesteuert.</div>
+      <div class="hint">🎲 Zufall würfelt eine komplette neue Konstellation (Kamera, Ebenen, Farben, Bewegung). Neue Ebenen bekommen automatisch eine passende Farbe (Basisgitter weiß, höhere/weiter entfernte Gitter dezenter). Klick auf eine Ebene macht sie aktiv (blau). Flache "Parallel"-Ebenen lassen sich per Drag verschieben; Perspektiv-Ebenen werden über ihre Meter-Felder gesteuert.</div>
     </section>
 
     <section class="panel">
@@ -426,6 +427,7 @@
   const bgColorInput = document.getElementById("bgColor");
   const layerListEl = document.getElementById("layerList");
   const addLayerBtn = document.getElementById("addLayer");
+  const randomBtn = document.getElementById("randomBtn");
   const qualityInput = document.getElementById("quality");
   const qualityVal = document.getElementById("qualityVal");
   const exportBtn = document.getElementById("exportBtn");
@@ -583,6 +585,59 @@
     });
     state.layers.unshift(layer); // new layer goes on top
     state.activeLayerId = layer.id;
+    renderLayerList();
+    render();
+  }
+
+  // ---------- Random constellation ----------
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+  function rndInt(a, b) { return Math.floor(rnd(a, b + 1)); }
+  function pick(arr) { return arr[rndInt(0, arr.length - 1)]; }
+  function chance(p) { return Math.random() < p; }
+
+  function randomizeScene() {
+    // Camera
+    state.camera.eye = +rnd(0.8, 3).toFixed(2);
+    state.camera.focal = rndInt(18, 85);
+    camEyeInput.value = state.camera.eye;
+    camFocalInput.value = state.camera.focal;
+    // Background: mostly black, sometimes a very dark tone
+    const bg = chance(0.75) ? "#000000"
+      : pick(["#0a0a12", "#0d0208", "#04121a", "#12060a", "#080810"]);
+    state.bgColor = bg;
+    bgColorInput.value = bg;
+
+    const n = rndInt(1, 4);
+    const layers = [];
+    for (let i = 0; i < n; i += 1) {
+      // first layer is always the ground floor; others vary
+      const type = i === 0 ? "hplane" : pick(["hplane", "hplane", "wall", "parallel-h", "parallel-v"]);
+      const style = autoStyle(i);
+      let fs = 0;
+      if (chance(0.85)) { fs = +rnd(1.5, 8).toFixed(1); if (chance(0.2)) fs = -fs; }
+      const l = makeLayer(type, {
+        color: chance(0.15) ? "#ffffff" : style.color,
+        opacity: chance(0.3) ? 100 : style.opacity,
+        flowSpeed: fs,
+        lineWidth: rndInt(1, 4),
+        cellM: pick([0.5, 1, 1, 2]),
+        cellSize: pick([80, 120, 160, 200]),
+        elevation: type === "hplane" ? (i === 0 && chance(0.6) ? 0 : +rnd(0, 4).toFixed(1)) : 0,
+        distance: +rnd(2, 10).toFixed(1),
+        heightM: +rnd(2, 5).toFixed(1),
+        widthM: +rnd(4, 10).toFixed(1),
+        extentM: pick([30, 40, 60]),
+      });
+      if (chance(0.4)) {
+        l.accentEvery = pick([2, 3, 4]);
+        l.accentMode = chance(0.5) ? "lines" : "cells";
+        l.accentColor = pick(LAYER_HUES.concat(["#ffffff", "#ff3355"]));
+        l.accentOpacity = rndInt(45, 100);
+      }
+      layers.push(l);
+    }
+    state.layers = layers;
+    state.activeLayerId = layers[0].id;
     renderLayerList();
     render();
   }
@@ -903,6 +958,7 @@
   }
 
   addLayerBtn.addEventListener("click", addLayer);
+  randomBtn.addEventListener("click", randomizeScene);
 
   // ---------- Rendering ----------
   function resizeCanvas() {
