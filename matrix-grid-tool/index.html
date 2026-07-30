@@ -154,38 +154,55 @@
   .swatch[data-c="#ffffff"] { background: #fff; }
   .swatch[data-c="#808080"] { background: #808080; }
 
-  #layerList { display: flex; flex-direction: column; gap: 10px; }
-  .layer-card {
+  /* Compact one-line layer rows -- scales to many layers. */
+  #layerList { display: flex; flex-direction: column; gap: 4px; }
+  .lrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px;
+    border-radius: 6px;
     background: var(--panel-2);
+    cursor: pointer;
   }
-  .layer-card.active {
+  .lrow.active {
     border-color: var(--accent);
     box-shadow: 0 0 0 1px var(--accent) inset;
   }
-  .layer-head {
+  .lrow .chip {
+    width: 14px; height: 14px; border-radius: 3px;
+    border: 1px solid var(--border);
+    flex: 0 0 auto;
+  }
+  .lrow .lname {
+    flex: 1 1 auto;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .lrow.hidden .lname { color: var(--text-dim); text-decoration: line-through; }
+  .lrow .lbtn {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    font-size: 12px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    line-height: 1;
+  }
+  .lrow .lbtn:hover { color: var(--text); border: none; }
+  /* Active-layer editor */
+  .editor-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 6px;
     margin-bottom: 8px;
   }
-  .layer-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    flex: 1 1 auto;
-  }
-  .layer-title .dot {
-    width: 9px; height: 9px; border-radius: 50%;
-    background: var(--text-dim);
-    flex: 0 0 auto;
-  }
-  .layer-card.active .layer-title .dot { background: var(--accent); }
-  .layer-title strong { font-size: 13px; }
+  .editor-head strong { font-size: 13px; }
   .layer-btns { display: flex; gap: 4px; }
   .layer-btns button { padding: 5px 8px; font-size: 12px; }
   .hint {
@@ -303,10 +320,15 @@
       <h2>Ebenen</h2>
       <div id="layerList"></div>
       <div class="row" style="margin-top:10px; gap:6px;">
-        <button id="addLayer" class="primary" style="flex:1 1 auto;">+ Ebene hinzufügen</button>
+        <button id="addLayer" class="primary" style="flex:1 1 auto;">+ Ebene</button>
         <button id="randomBtn" title="Zufällige Konstellation" style="flex:0 0 auto;">🎲 Zufall</button>
       </div>
-      <div class="hint">🎲 Zufall würfelt eine komplette neue Konstellation (Kamera, Ebenen, Farben, Bewegung). Neue Ebenen bekommen automatisch eine passende Farbe (Basisgitter weiß, höhere/weiter entfernte Gitter dezenter). Klick auf eine Ebene macht sie aktiv (blau). Flache "Parallel"-Ebenen lassen sich per Drag verschieben; Perspektiv-Ebenen werden über ihre Meter-Felder gesteuert.</div>
+      <div class="hint">Tippe auf eine Zeile, um die Ebene zu bearbeiten (unten). 👁 blendet ein/aus. 🎲 Zufall würfelt eine komplette neue Konstellation.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Aktive Ebene</h2>
+      <div id="layerEditor"></div>
     </section>
 
     <section class="panel">
@@ -426,6 +448,7 @@
   const swapBtn = document.getElementById("swapOrientation");
   const bgColorInput = document.getElementById("bgColor");
   const layerListEl = document.getElementById("layerList");
+  const layerEditorEl = document.getElementById("layerEditor");
   const addLayerBtn = document.getElementById("addLayer");
   const randomBtn = document.getElementById("randomBtn");
   const qualityInput = document.getElementById("quality");
@@ -592,6 +615,7 @@
     state.layers.unshift(layer); // new layer goes on top
     state.activeLayerId = layer.id;
     renderLayerList();
+    renderActiveEditor();
     render();
   }
 
@@ -644,6 +668,7 @@
     state.layers = layers;
     state.activeLayerId = layers[0].id;
     renderLayerList();
+    renderActiveEditor();
     render();
   }
 
@@ -656,6 +681,7 @@
       state.activeLayerId = state.layers[0].id;
     }
     renderLayerList();
+    renderActiveEditor();
     render();
   }
 
@@ -669,224 +695,221 @@
     render();
   }
 
+  // Short one-line label for the compact list (distinguishes many layers).
+  function layerShortLabel(layer) {
+    switch (layer.type) {
+      case "hplane": return "H-Ebene · " + Number(layer.elevation).toFixed(1) + " m";
+      case "wall": return "Wand · " + Number(layer.distance).toFixed(1) + " m";
+      case "parallel-h": return "Parallel –";
+      case "parallel-v": return "Parallel |";
+      default: return layer.type;
+    }
+  }
+
+  // Compact list: one clickable row per layer (colour chip, name, eye
+  // toggle). The full controls live in the single "Aktive Ebene" editor.
   function renderLayerList() {
     layerListEl.innerHTML = "";
-    state.layers.forEach((layer, idx) => {
-      const card = document.createElement("div");
-      card.className = "layer-card" + (layer.id === state.activeLayerId ? " active" : "");
+    state.layers.forEach((layer) => {
+      const row = document.createElement("div");
+      row.className = "lrow" + (layer.id === state.activeLayerId ? " active" : "")
+        + (layer.visible ? "" : " hidden");
 
-      const head = document.createElement("div");
-      head.className = "layer-head";
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.style.background = layer.color;
+      layer._chipEl = chip;
 
-      const title = document.createElement("div");
-      title.className = "layer-title";
-      title.innerHTML =
-        '<span class="dot"></span><strong>' + TYPE_LABELS[layer.type] + "</strong>";
-      title.addEventListener("click", () => {
-        state.activeLayerId = layer.id;
-        renderLayerList();
+      const name = document.createElement("span");
+      name.className = "lname";
+      name.textContent = layerShortLabel(layer);
+      layer._rowNameEl = name;
+
+      const eye = document.createElement("button");
+      eye.className = "lbtn";
+      eye.textContent = layer.visible ? "👁" : "🚫";
+      eye.title = "Sichtbarkeit";
+      eye.addEventListener("click", (e) => {
+        e.stopPropagation();
+        layer.visible = !layer.visible;
+        eye.textContent = layer.visible ? "👁" : "🚫";
+        row.classList.toggle("hidden", !layer.visible);
+        render();
       });
 
-      const btns = document.createElement("div");
-      btns.className = "layer-btns";
-      const upBtn = mkIconBtn("▲", () => moveLayer(layer.id, -1));
-      const downBtn = mkIconBtn("▼", () => moveLayer(layer.id, 1));
-      const delBtn = mkIconBtn("✕", () => removeLayer(layer.id));
-      btns.append(upBtn, downBtn, delBtn);
+      row.addEventListener("click", () => {
+        if (state.activeLayerId === layer.id) return;
+        state.activeLayerId = layer.id;
+        renderLayerList();
+        renderActiveEditor();
+      });
 
-      head.append(title, btns);
-      card.appendChild(head);
+      row.append(chip, name, eye);
+      layerListEl.appendChild(row);
+    });
+  }
 
+  // Full editor for the currently active layer only.
+  function renderActiveEditor() {
+    layerEditorEl.innerHTML = "";
+    const layer = getLayer(state.activeLayerId);
+    if (!layer) {
+      layerEditorEl.innerHTML = '<div class="hint">Keine Ebene ausgewählt.</div>';
+      return;
+    }
+    const card = layerEditorEl;
+
+    const head = document.createElement("div");
+    head.className = "editor-head";
+    const title = document.createElement("strong");
+    title.textContent = layerShortLabel(layer);
+    const btns = document.createElement("div");
+    btns.className = "layer-btns";
+    btns.append(
+      mkIconBtn("▲", () => moveLayer(layer.id, -1)),
+      mkIconBtn("▼", () => moveLayer(layer.id, 1)),
+      mkIconBtn("✕", () => removeLayer(layer.id))
+    );
+    head.append(title, btns);
+    card.appendChild(head);
+
+    const refreshLabels = () => {
+      const t = layerShortLabel(layer);
+      title.textContent = t;
+      if (layer._rowNameEl) layer._rowNameEl.textContent = t;
+    };
+    const liveRender = () => { if (!state.anim.playing) render(); };
+
+    card.appendChild(
+      fieldRow("Typ", selectInput(
+        [["hplane", TYPE_LABELS.hplane], ["wall", TYPE_LABELS.wall],
+         ["parallel-h", TYPE_LABELS["parallel-h"]], ["parallel-v", TYPE_LABELS["parallel-v"]]],
+        layer.type,
+        (v) => { layer.type = v; renderLayerList(); renderActiveEditor(); render(); }
+      ))
+    );
+
+    if (layer.type === "hplane") {
+      card.appendChild(sliderRow("Höhe", layer.elevation, -3, 8, 0.1, "m", (v) => {
+        layer.elevation = v; refreshLabels(); liveRender();
+      }));
+      card.appendChild(sliderRow("Zellgröße", layer.cellM, 0.1, 5, 0.1, "m", (v) => {
+        layer.cellM = Math.max(0.1, v); liveRender();
+      }));
+      card.appendChild(sliderRow("Ausdehnung", layer.extentM, 5, 100, 1, "m", (v) => {
+        layer.extentM = Math.max(5, v); liveRender();
+      }));
+    } else if (layer.type === "wall") {
+      card.appendChild(sliderRow("Entfernung", layer.distance, 0.5, 30, 0.5, "m", (v) => {
+        layer.distance = Math.max(0.5, v); refreshLabels(); liveRender();
+      }));
+      card.appendChild(sliderRow("Höhe", layer.heightM, 0.5, 10, 0.5, "m", (v) => {
+        layer.heightM = Math.max(0.5, v); liveRender();
+      }));
+      card.appendChild(sliderRow("Breite", layer.widthM, 0.5, 20, 0.5, "m", (v) => {
+        layer.widthM = Math.max(0.5, v); liveRender();
+      }));
+      card.appendChild(sliderRow("Zellgröße", layer.cellM, 0.1, 5, 0.1, "m", (v) => {
+        layer.cellM = Math.max(0.1, v); liveRender();
+      }));
+    } else {
+      card.appendChild(sliderRow("Zellgröße", layer.cellSize, 8, 400, 1, "px", (v) => {
+        layer.cellSize = Math.max(4, Math.round(v)); liveRender();
+      }));
+    }
+
+    card.appendChild(sliderRow("Linienbreite", layer.lineWidth, 1, 20, 1, "px", (v) => {
+      layer.lineWidth = Math.max(1, Math.round(v)); liveRender();
+    }));
+
+    const colorRow = document.createElement("div");
+    colorRow.className = "row";
+    const colorLabel = document.createElement("label");
+    colorLabel.textContent = "Farbe";
+    colorRow.appendChild(colorLabel);
+    const sw = document.createElement("div");
+    sw.className = "swatches";
+    ["#ffffff", "#000000", "#808080"].forEach((c) => {
+      const b = document.createElement("button");
+      b.className = "swatch";
+      b.dataset.c = c;
+      b.addEventListener("click", () => {
+        layer.color = c; colorPicker.value = c;
+        if (layer._chipEl) layer._chipEl.style.background = c;
+        render();
+      });
+      sw.appendChild(b);
+    });
+    colorRow.appendChild(sw);
+    const colorPicker = document.createElement("input");
+    colorPicker.type = "color";
+    colorPicker.value = layer.color;
+    colorPicker.addEventListener("input", () => {
+      layer.color = colorPicker.value;
+      renderLayerList(); // refresh chip
+      render();
+    });
+    colorRow.appendChild(colorPicker);
+    card.appendChild(colorRow);
+
+    card.appendChild(sliderRow("Deckkraft", layer.opacity, 0, 100, 1, "%", (v) => {
+      layer.opacity = Math.round(v); render();
+    }));
+
+    // ---- Bewegung / motion ----
+    const isPersp = layer.type === "hplane" || layer.type === "wall";
+    const flowMax = isPersp ? 12 : 300;
+    const flowStep = isPersp ? 0.5 : 10;
+    card.appendChild(sliderRow(isPersp ? "Bewegung (m/s)" : "Bewegung (px/s)",
+      layer.flowSpeed, -flowMax, flowMax, flowStep, "", (v) => {
+        layer.flowSpeed = v; if (!state.anim.playing) render();
+      }));
+
+    // ---- Accent / Betonung ----
+    card.appendChild(sliderRow("Betonung (jede N-te)", layer.accentEvery, 0, 12, 1, "", (v) => {
+      layer.accentEvery = Math.round(v); renderActiveEditor(); render();
+    }));
+    if (layer.accentEvery >= 2) {
       card.appendChild(
-        fieldRow("Typ", selectInput(
-          [["parallel-h", TYPE_LABELS["parallel-h"]], ["parallel-v", TYPE_LABELS["parallel-v"]],
-           ["hplane", TYPE_LABELS.hplane], ["wall", TYPE_LABELS.wall]],
-          layer.type,
-          (v) => { layer.type = v; renderLayerList(); render(); }
+        fieldRow("— als", selectInput(
+          [["lines", "Linie"], ["cells", "Fläche (Feld)"]],
+          layer.accentMode,
+          (v) => { layer.accentMode = v; render(); }
         ))
       );
-
-      const liveRender = () => { if (!state.anim.playing) render(); };
-      if (layer.type === "hplane") {
-        card.appendChild(sliderRow("Höhe", layer.elevation, -3, 8, 0.1, "m", (v) => {
-          layer.elevation = v; liveRender();
-        }));
-        card.appendChild(sliderRow("Zellgröße", layer.cellM, 0.1, 5, 0.1, "m", (v) => {
-          layer.cellM = Math.max(0.1, v); liveRender();
-        }));
-        card.appendChild(sliderRow("Ausdehnung", layer.extentM, 5, 100, 1, "m", (v) => {
-          layer.extentM = Math.max(5, v); liveRender();
-        }));
-      } else if (layer.type === "wall") {
-        card.appendChild(sliderRow("Entfernung", layer.distance, 0.5, 30, 0.5, "m", (v) => {
-          layer.distance = Math.max(0.5, v); liveRender();
-        }));
-        card.appendChild(sliderRow("Höhe", layer.heightM, 0.5, 10, 0.5, "m", (v) => {
-          layer.heightM = Math.max(0.5, v); liveRender();
-        }));
-        card.appendChild(sliderRow("Breite", layer.widthM, 0.5, 20, 0.5, "m", (v) => {
-          layer.widthM = Math.max(0.5, v); liveRender();
-        }));
-        card.appendChild(sliderRow("Zellgröße", layer.cellM, 0.1, 5, 0.1, "m", (v) => {
-          layer.cellM = Math.max(0.1, v); liveRender();
-        }));
-      } else {
-        card.appendChild(sliderRow("Zellgröße", layer.cellSize, 8, 400, 1, "px", (v) => {
-          layer.cellSize = Math.max(4, Math.round(v)); liveRender();
-        }));
-      }
-
-      card.appendChild(
-        fieldRow("Linienbreite", numberInput(layer.lineWidth, 1, 200, (v) => {
-          layer.lineWidth = Math.max(1, Math.round(v));
-          render();
-        }))
-      );
-
-      const colorRow = document.createElement("div");
-      colorRow.className = "row";
-      const colorLabel = document.createElement("label");
-      colorLabel.textContent = "Farbe";
-      colorRow.appendChild(colorLabel);
-      const sw = document.createElement("div");
-      sw.className = "swatches";
-      ["#000000", "#ffffff", "#808080"].forEach((c) => {
+      const accRow = document.createElement("div");
+      accRow.className = "row";
+      const accLabel = document.createElement("label");
+      accLabel.textContent = "— Farbe";
+      accRow.appendChild(accLabel);
+      const accSw = document.createElement("div");
+      accSw.className = "swatches";
+      ["#d02020", "#ffffff", "#000000", "#808080"].forEach((c) => {
         const b = document.createElement("button");
         b.className = "swatch";
         b.dataset.c = c;
-        b.addEventListener("click", () => { layer.color = c; colorPicker.value = c; render(); });
-        sw.appendChild(b);
+        b.style.background = c;
+        b.addEventListener("click", () => { layer.accentColor = c; accPicker.value = c; render(); });
+        accSw.appendChild(b);
       });
-      colorRow.appendChild(sw);
-      const colorPicker = document.createElement("input");
-      colorPicker.type = "color";
-      colorPicker.value = layer.color;
-      colorPicker.addEventListener("input", () => { layer.color = colorPicker.value; render(); });
-      colorRow.appendChild(colorPicker);
-      card.appendChild(colorRow);
+      accRow.appendChild(accSw);
+      const accPicker = document.createElement("input");
+      accPicker.type = "color";
+      accPicker.value = layer.accentColor;
+      accPicker.addEventListener("input", () => { layer.accentColor = accPicker.value; render(); });
+      accRow.appendChild(accPicker);
+      card.appendChild(accRow);
 
-      const opRow = document.createElement("div");
-      opRow.className = "row";
-      const opLabel = document.createElement("label");
-      opLabel.textContent = "Deckkraft";
-      const opRange = document.createElement("input");
-      opRange.type = "range";
-      opRange.min = 0; opRange.max = 100; opRange.value = layer.opacity;
-      const opVal = document.createElement("span");
-      opVal.style.minWidth = "36px";
-      opVal.style.fontSize = "12px";
-      opVal.style.color = "var(--text-dim)";
-      opVal.textContent = layer.opacity + "%";
-      opRange.addEventListener("input", () => {
-        layer.opacity = Number(opRange.value);
-        opVal.textContent = layer.opacity + "%";
-        render();
-      });
-      opRow.append(opLabel, opRange, opVal);
-      card.appendChild(opRow);
+      card.appendChild(sliderRow("— Deckkraft", layer.accentOpacity, 0, 100, 1, "%", (v) => {
+        layer.accentOpacity = Math.round(v); render();
+      }));
+    }
 
-      // ---- Bewegung / motion ----
-      const isPersp = layer.type === "hplane" || layer.type === "wall";
-      const flowRow = document.createElement("div");
-      flowRow.className = "row";
-      const flowLabel = document.createElement("label");
-      flowLabel.textContent = isPersp ? "Bewegung (m/s)" : "Bewegung (px/s)";
-      const flowRange = document.createElement("input");
-      flowRange.type = "range";
-      const flowMax = isPersp ? 12 : 300;
-      flowRange.min = -flowMax; flowRange.max = flowMax;
-      flowRange.step = isPersp ? 0.5 : 10;
-      flowRange.value = layer.flowSpeed;
-      const flowVal = document.createElement("span");
-      flowVal.style.minWidth = "42px";
-      flowVal.style.fontSize = "12px";
-      flowVal.style.color = "var(--text-dim)";
-      flowVal.textContent = layer.flowSpeed;
-      flowRange.addEventListener("input", () => {
-        layer.flowSpeed = Number(flowRange.value);
-        flowVal.textContent = layer.flowSpeed;
-        if (!state.anim.playing) render();
-      });
-      flowRow.append(flowLabel, flowRange, flowVal);
-      card.appendChild(flowRow);
-
-      // ---- Accent / Betonung (every Nth line or cell) ----
-      card.appendChild(fieldRow("Betonung", numberInput(layer.accentEvery, 0, 100, (v) => {
-        layer.accentEvery = Math.max(0, Math.round(v));
-        renderLayerList();
-        render();
-      })));
-      if (layer.accentEvery >= 2) {
-        card.appendChild(
-          fieldRow("— jede N-te", selectInput(
-            [["lines", "Linie"], ["cells", "Fläche (Feld)"]],
-            layer.accentMode,
-            (v) => { layer.accentMode = v; render(); }
-          ))
-        );
-        const accRow = document.createElement("div");
-        accRow.className = "row";
-        const accLabel = document.createElement("label");
-        accLabel.textContent = "— Farbe";
-        accRow.appendChild(accLabel);
-        const accSw = document.createElement("div");
-        accSw.className = "swatches";
-        ["#d02020", "#000000", "#ffffff", "#808080"].forEach((c) => {
-          const b = document.createElement("button");
-          b.className = "swatch";
-          b.dataset.c = c;
-          b.style.background = c;
-          b.addEventListener("click", () => { layer.accentColor = c; accPicker.value = c; render(); });
-          accSw.appendChild(b);
-        });
-        accRow.appendChild(accSw);
-        const accPicker = document.createElement("input");
-        accPicker.type = "color";
-        accPicker.value = layer.accentColor;
-        accPicker.addEventListener("input", () => { layer.accentColor = accPicker.value; render(); });
-        accRow.appendChild(accPicker);
-        card.appendChild(accRow);
-
-        const accOpRow = document.createElement("div");
-        accOpRow.className = "row";
-        const accOpLabel = document.createElement("label");
-        accOpLabel.textContent = "— Deckkraft";
-        const accOpRange = document.createElement("input");
-        accOpRange.type = "range";
-        accOpRange.min = 0; accOpRange.max = 100; accOpRange.value = layer.accentOpacity;
-        const accOpVal = document.createElement("span");
-        accOpVal.style.minWidth = "36px";
-        accOpVal.style.fontSize = "12px";
-        accOpVal.style.color = "var(--text-dim)";
-        accOpVal.textContent = layer.accentOpacity + "%";
-        accOpRange.addEventListener("input", () => {
-          layer.accentOpacity = Number(accOpRange.value);
-          accOpVal.textContent = layer.accentOpacity + "%";
-          render();
-        });
-        accOpRow.append(accOpLabel, accOpRange, accOpVal);
-        card.appendChild(accOpRow);
-      }
-
-      // Flat parallel layers are drag-positioned; perspective layers are
-      // measurement-driven and expose no image-space offset.
-      if (layer.type === "parallel-h" || layer.type === "parallel-v") {
-        card.appendChild(pointRow("Offset X/Y", layer, "originX", "originY"));
-      }
-
-      const visRow = document.createElement("div");
-      visRow.className = "row";
-      const visLabel = document.createElement("label");
-      visLabel.textContent = "Sichtbar";
-      const visCb = document.createElement("input");
-      visCb.type = "checkbox";
-      visCb.checked = layer.visible;
-      visCb.addEventListener("change", () => { layer.visible = visCb.checked; render(); });
-      visRow.append(visLabel, visCb);
-      card.appendChild(visRow);
-
-      layerListEl.appendChild(card);
-    });
+    // Flat parallel layers are drag-positioned; perspective layers are
+    // measurement-driven and expose no image-space offset.
+    if (layer.type === "parallel-h" || layer.type === "parallel-v") {
+      card.appendChild(pointRow("Offset X/Y", layer, "originX", "originY"));
+    }
   }
 
   function mkIconBtn(label, onClick) {
@@ -1275,6 +1298,7 @@
   syncResolutionInputs();
   resizeCanvas();
   renderLayerList();
+  renderActiveEditor();
   render();
   if (state.anim.playing) {
     playBtn.textContent = "⏸ Pause";

@@ -39,10 +39,12 @@ works fine over `file://`, no server or install required).
    is white; further/higher planes take a soft hue and fade to be more
    subtle). **🎲 Zufall** rolls a whole new random constellation (camera,
    layers, colours, motion, accents) — keep clicking to try out different
-   looks. Each layer has line width, color, opacity, motion, an accent
-   (below), and can be shown/hidden; list order is the stacking order (top
-   card drawn last). Click a layer card to make it the *active* layer.
-   Each layer's **Typ**:
+   looks. The layer list is **compact** — one line per layer (colour chip,
+   name, 👁 visibility toggle) so it scales to many layers. **Tap a row**
+   to make it the *active* layer; its full controls (type, sliders, colour,
+   opacity, motion, accent, reorder ▲▼, delete ✕) appear in the **Aktive
+   Ebene** panel below. List order is the stacking order (top row drawn
+   last). Each layer's **Typ**:
    - *Horizontale Ebene (Perspektive)*: a real horizontal plane at a given
      **Höhe** (0 = floor) with a metric **Zellgröße**, projected through
      the camera so it recedes correctly into depth toward the horizon.
