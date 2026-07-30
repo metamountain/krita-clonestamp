@@ -541,7 +541,8 @@
       // both directions (incl. negative -> e.g. x -1, and along -z/depth).
       accentPhaseA: Math.floor(Math.random() * 7) - 3, // x axis: -3..+3
       accentPhaseB: Math.floor(Math.random() * 7) - 3, // z/depth axis: -3..+3
-      flowSpeed: 0,        // motion: metres/s (perspective) or px/s (flat)
+      flowSpeed: 0,        // depth/vertical motion: m/s (perspective) or px/s (flat)
+      flowX: 0,            // lateral (x) drift: m/s (perspective) or px/s (flat)
       vel: 0,              // hplane: vertical velocity (m/s) for the physics stack
       lineWidth: 3,
       color: "#000000",
@@ -581,6 +582,7 @@
         elevation: i * 1.1,
         cellM: 1,
         flowSpeed: 3,
+        flowX: +( (Math.random() * 2 - 1) * 2.5 ).toFixed(1), // lateral drift
         color: i === 0 ? "#ffffff" : s.color,
         opacity: i === 0 ? 100 : s.opacity,
       });
@@ -728,7 +730,7 @@
     const idx = state.layers.length;
     const s = autoStyle(idx);
     const ov = { color: s.color, opacity: s.opacity, flowSpeed: +rnd(1.5, 7).toFixed(1),
-      cellM: pick([0.5, 1, 1, 2]) };
+      flowX: +rnd(-4, 4).toFixed(1), cellM: pick([0.5, 1, 1, 2]) };
     if (type === "hplane") ov.elevation = +rnd(0, 8).toFixed(1);
     if (type === "wall") {
       ov.distance = +rnd(2, 12).toFixed(1); ov.heightM = +rnd(2, 5).toFixed(1);
@@ -1049,6 +1051,7 @@
         color: chance(0.12) ? "#ffffff" : style.color,
         opacity: chance(0.3) ? 100 : style.opacity,
         flowSpeed: fs,
+        flowX: chance(0.7) ? +rnd(-4, 4).toFixed(1) : 0,
         lineWidth: rndInt(1, 4),
         cellM: pick([0.5, 1, 1, 1, 2]),
         cellSize: pick([80, 120, 160, 200]),
@@ -1294,14 +1297,22 @@
       layer.opacity = Math.round(v); render();
     }));
 
-    // ---- Bewegung / motion ----
+    // ---- Bewegung / motion (X = lateral, Y = depth/vertical) ----
     const isPersp = layer.type === "hplane" || layer.type === "wall";
     const flowMax = isPersp ? 12 : 300;
     const flowStep = isPersp ? 0.5 : 10;
-    card.appendChild(sliderRow(isPersp ? "Bewegung (m/s)" : "Bewegung (px/s)",
+    const yLabel = layer.type === "hplane" ? "Bewegung Tiefe"
+      : (isPersp ? "Bewegung Y" : "Bewegung");
+    card.appendChild(sliderRow(yLabel + (isPersp ? " (m/s)" : " (px/s)"),
       layer.flowSpeed, -flowMax, flowMax, flowStep, "", (v) => {
         layer.flowSpeed = v; if (!state.anim.playing) render();
       }));
+    if (isPersp) {
+      card.appendChild(sliderRow("Bewegung X (m/s)",
+        layer.flowX, -flowMax, flowMax, flowStep, "", (v) => {
+          layer.flowX = v; if (!state.anim.playing) render();
+        }));
+    }
 
     // ---- Accent / Betonung ----
     card.appendChild(sliderRow("Betonung (jede N-te)", layer.accentEvery, 0, 12, 1, "", (v) => {
@@ -1549,18 +1560,19 @@
     const cellsMode = N && layer.accentMode === "cells";
     const base = [], acc = [], quads = [];
     const halfW = J * cell;
-    // Animation: scroll the cross-grid toward the viewer by a phase in
-    // [0,cell) -- the classic moving "game floor". Depth lines are fixed.
-    const phase = mod(state.clock * (layer.flowSpeed || 0), cell);
-    // depth lines (run into Z at fixed X)
+    // Animation: scroll the grid in depth (phaseZ -> moving "game floor")
+    // and laterally in x (phaseX) so the plane drifts in both directions.
+    const phaseZ = mod(state.clock * (layer.flowSpeed || 0), cell);
+    const phaseX = mod(state.clock * (layer.flowX || 0), cell);
+    // depth lines (run into Z at fixed X), scrolled laterally by phaseX
     for (let j = -J; j <= J; j += 1) {
-      const X = j * cell;
+      const X = j * cell - phaseX;
       const p0 = project(X, e, ZNEAR), p1 = project(X, e, ext);
       (linesMode && mod(j + pA, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
-    // cross lines (run across X at fixed Z), scrolled by phase
+    // cross lines (run across X at fixed Z), scrolled in depth by phaseZ
     for (let k = 1; k <= K + 1; k += 1) {
-      const Z = k * cell - phase;
+      const Z = k * cell - phaseZ;
       if (Z < ZNEAR || Z > ext) continue;
       const p0 = project(-halfW, e, Z), p1 = project(halfW, e, Z);
       (linesMode && mod(k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
@@ -1570,9 +1582,9 @@
         if (mod(j + pA, N) !== 0) continue;
         for (let k = 1; k <= K + 1; k += 1) {
           if (mod(k + pB, N) !== 0) continue;
-          const Z0 = k * cell - phase, Z1 = Z0 + cell;
+          const Z0 = k * cell - phaseZ, Z1 = Z0 + cell;
           if (Z0 < ZNEAR || Z0 > ext) continue;
-          const X0 = j * cell, X1 = (j + 1) * cell;
+          const X0 = j * cell - phaseX, X1 = X0 + cell;
           quads.push([proj2(X0, e, Z0), proj2(X1, e, Z0), proj2(X1, e, Z1), proj2(X0, e, Z1)]);
         }
       }
@@ -1594,18 +1606,19 @@
     const cellsMode = N && layer.accentMode === "cells";
     const base = [], acc = [], quads = [];
     const halfW = Jw * cell;
-    // Animation: scroll the wall's horizontal grid vertically by a phase
-    // in [0,cell); vertical lines stay put.
-    const phase = mod(state.clock * (layer.flowSpeed || 0), cell);
-    // vertical lines (fixed X, Y from 0..H)
+    // Animation: scroll the wall grid vertically (phaseY) and laterally
+    // (phaseX) so it drifts in x and y.
+    const phaseY = mod(state.clock * (layer.flowSpeed || 0), cell);
+    const phaseX = mod(state.clock * (layer.flowX || 0), cell);
+    // vertical lines (fixed X, Y from 0..H), scrolled laterally
     for (let j = -Jw; j <= Jw; j += 1) {
-      const X = j * cell;
+      const X = j * cell - phaseX;
       const p0 = project(X, 0, d), p1 = project(X, H, d);
       (linesMode && mod(j + pA, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
-    // horizontal lines (fixed Y, X from -halfW..halfW), scrolled by phase
+    // horizontal lines (fixed Y, X from -halfW..halfW), scrolled vertically
     for (let k = 0; k <= Kw + 1; k += 1) {
-      const Y = k * cell - phase;
+      const Y = k * cell - phaseY;
       if (Y < 0 || Y > H) continue;
       const p0 = project(-halfW, Y, d), p1 = project(halfW, Y, d);
       (linesMode && mod(k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
@@ -1615,9 +1628,9 @@
         if (mod(j + pA, N) !== 0) continue;
         for (let k = 0; k <= Kw + 1; k += 1) {
           if (mod(k + pB, N) !== 0) continue;
-          const Y0 = k * cell - phase, Y1 = Y0 + cell;
+          const Y0 = k * cell - phaseY, Y1 = Y0 + cell;
           if (Y0 < 0 || Y0 > H) continue;
-          const X0 = j * cell, X1 = (j + 1) * cell;
+          const X0 = j * cell - phaseX, X1 = X0 + cell;
           quads.push([proj2(X0, Y0, d), proj2(X1, Y0, d), proj2(X1, Y1, d), proj2(X0, Y1, d)]);
         }
       }
