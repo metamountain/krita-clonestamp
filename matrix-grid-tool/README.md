@@ -26,12 +26,15 @@ works fine over `file://`, no server or install required).
    i.e. on top). Click a layer card to make it the *active* layer.
 
    Each layer's **Typ** can also be switched to *Radial (Perspektive)*
-   (straight rays spreading out from a vanishing/center point) or
-   *Konzentrisch* (concentric rings around a center point) for
-   perspective/moiré-style overlays instead of a straight grid line —
-   optional, not the default.
+   (straight rays spreading out from one vanishing point), *2
+   Fluchtpunkte* (two independent vanishing points, each with its own ray
+   burst — a classic two-point perspective grid), or *Konzentrisch*
+   (concentric rings around a center point), for perspective/moiré-style
+   overlays instead of a straight grid line — optional, not the default.
 4. **Drag to move**: click/tap and drag directly on the canvas preview to
-   reposition the active layer (its offset/position updates live).
+   reposition the active layer (its offset/position updates live). For a
+   *2 Fluchtpunkte* layer, the **Drag bewegt** dropdown picks which of the
+   two vanishing points the canvas drag controls.
 5. **Export**: renders the composed grid at the full target resolution and
    downloads it as a JPEG.
 
