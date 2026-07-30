@@ -227,7 +227,7 @@
   <header>
     <div>
       <h1>Matrix Grid Tool</h1>
-      <div class="sub">Perspektivische Linien-Overlays für KI-Bildgenerierung</div>
+      <div class="sub">Grid-Referenzbilder für KI-Bildgenerierung</div>
     </div>
   </header>
 
@@ -275,7 +275,7 @@
       <div class="row" style="margin-top:10px;">
         <button id="addLayer">+ Ebene hinzufügen</button>
       </div>
-      <div class="hint">Aktive Ebene (blau markiert) lässt sich per Drag direkt in der Vorschau verschieben — bewegt den Fluchtpunkt/Mittelpunkt der Ebene. Überlagere mehrere Ebenen mit unterschiedlicher Position/Dichte/Rotation für Moiré- und Verdichtungseffekte.</div>
+      <div class="hint">Aktive Ebene (blau markiert) lässt sich per Drag direkt in der Vorschau verschieben. Standard: eine horizontale + eine vertikale Ebene mit gleicher Zellgröße ergeben ein quadratisches Grid. Optional: Typ auf Radial/Konzentrisch stellen für perspektivische Overlays.</div>
     </section>
 
     <section class="panel">
@@ -309,15 +309,10 @@
     { name: "Custom",                     w: null, h: null },
   ];
 
-  // Layer types (all deliberately NOT a flat orthogonal grid):
-  //  - 'radial':     straight rays spreading out from a vanishing/center
-  //                  point -- the classic one-point-perspective grid.
-  //  - 'concentric': concentric rings around a center point -- depth /
-  //                  distance cues, and strong moiré when overlapped
-  //                  with a 'radial' layer.
-  //  - 'parallel-h' / 'parallel-v': plain evenly-spaced straight lines
-  //                  (infinite vanishing point), kept as a building
-  //                  block for combining with the perspective types.
+  // Layer types -- default/primary is the flat square grid ('parallel-h'
+  // + 'parallel-v', same cell size on both = square fields). 'radial'
+  // (rays from a vanishing point) and 'concentric' (rings) are additional
+  // options for perspective/moiré overlays, not the default.
   let layerSeq = 0;
   function makeLayer(type, overrides) {
     layerSeq += 1;
@@ -349,14 +344,8 @@
     bgColor: "#ffffff",
     // list order = z-order; index 0 is drawn LAST (topmost).
     layers: [
-      makeLayer("concentric", {
-        originX: PRESETS[0].w * 0.5, originY: PRESETS[0].h * 0.65,
-        cellSize: 90, lineWidth: 2, color: "#808080", opacity: 55,
-      }),
-      makeLayer("radial", {
-        originX: PRESETS[0].w * 0.5, originY: PRESETS[0].h * 0.35,
-        lineCount: 32, rotation: 0, lineWidth: 3, color: "#000000", opacity: 75,
-      }),
+      makeLayer("parallel-v", { cellSize: 160 }),
+      makeLayer("parallel-h", { cellSize: 160 }),
     ],
     activeLayerId: null,
   };
@@ -458,10 +447,7 @@
   function getLayer(id) { return state.layers.find((l) => l.id === id); }
 
   function addLayer() {
-    const layer = makeLayer("radial", {
-      originX: state.width / 2,
-      originY: state.height / 2,
-    });
+    const layer = makeLayer("parallel-h", { cellSize: 160 });
     state.layers.unshift(layer); // new layer goes on top
     state.activeLayerId = layer.id;
     renderLayerList();
@@ -520,8 +506,8 @@
 
       card.appendChild(
         fieldRow("Typ", selectInput(
-          [["radial", TYPE_LABELS.radial], ["concentric", TYPE_LABELS.concentric],
-           ["parallel-h", TYPE_LABELS["parallel-h"]], ["parallel-v", TYPE_LABELS["parallel-v"]]],
+          [["parallel-h", TYPE_LABELS["parallel-h"]], ["parallel-v", TYPE_LABELS["parallel-v"]],
+           ["radial", TYPE_LABELS.radial], ["concentric", TYPE_LABELS.concentric]],
           layer.type,
           (v) => { layer.type = v; renderLayerList(); render(); }
         ))
