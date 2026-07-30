@@ -273,13 +273,13 @@
       <h2>Kamera (Perspektive)</h2>
       <div class="row">
         <label>Standpunkthöhe</label>
-        <input type="number" id="camEye" min="0" max="1000" step="0.1" value="1.6">
-        <span style="color:var(--text-dim);font-size:12px;">m</span>
+        <input type="range" id="camEye" min="0" max="6" step="0.05" value="1.6">
+        <span id="camEyeVal" style="min-width:48px;text-align:right;color:var(--text-dim);font-size:12px;">1.6 m</span>
       </div>
       <div class="row">
         <label>Brennweite</label>
-        <input type="number" id="camFocal" min="4" max="2000" step="1" value="50">
-        <span style="color:var(--text-dim);font-size:12px;">mm (Vollformat 36 mm)</span>
+        <input type="range" id="camFocal" min="12" max="200" step="1" value="50">
+        <span id="camFocalVal" style="min-width:52px;text-align:right;color:var(--text-dim);font-size:12px;">50 mm</span>
       </div>
       <div class="row">
         <label>Horizont anzeigen</label>
@@ -432,24 +432,30 @@
   const qualityVal = document.getElementById("qualityVal");
   const exportBtn = document.getElementById("exportBtn");
   const camEyeInput = document.getElementById("camEye");
+  const camEyeVal = document.getElementById("camEyeVal");
   const camFocalInput = document.getElementById("camFocal");
+  const camFocalVal = document.getElementById("camFocalVal");
   const camHorizonInput = document.getElementById("camHorizon");
   const playBtn = document.getElementById("playBtn");
   const animSpeedInput = document.getElementById("animSpeed");
   const animSpeedVal = document.getElementById("animSpeedVal");
 
   // ---------- Camera ----------
-  camEyeInput.addEventListener("change", () => {
-    const v = Number(camEyeInput.value);
-    state.camera.eye = isFinite(v) ? v : 0;
-    render();
+  function syncCameraInputs() {
+    camEyeInput.value = state.camera.eye;
+    camFocalInput.value = state.camera.focal;
+    camEyeVal.textContent = Number(state.camera.eye).toFixed(2) + " m";
+    camFocalVal.textContent = Math.round(state.camera.focal) + " mm";
+  }
+  camEyeInput.addEventListener("input", () => {
+    state.camera.eye = Number(camEyeInput.value);
+    camEyeVal.textContent = state.camera.eye.toFixed(2) + " m";
+    if (!state.anim.playing) render();
   });
-  camFocalInput.addEventListener("change", () => {
-    let v = Number(camFocalInput.value);
-    if (!isFinite(v) || v < 1) v = 1;
-    state.camera.focal = v;
-    camFocalInput.value = v;
-    render();
+  camFocalInput.addEventListener("input", () => {
+    state.camera.focal = Number(camFocalInput.value);
+    camFocalVal.textContent = Math.round(state.camera.focal) + " mm";
+    if (!state.anim.playing) render();
   });
   camHorizonInput.addEventListener("change", () => {
     state.camera.showHorizon = camHorizonInput.checked;
@@ -599,8 +605,7 @@
     // Camera
     state.camera.eye = +rnd(0.8, 3).toFixed(2);
     state.camera.focal = rndInt(18, 85);
-    camEyeInput.value = state.camera.eye;
-    camFocalInput.value = state.camera.focal;
+    syncCameraInputs();
     // Background: mostly black, sometimes a very dark tone
     const bg = chance(0.75) ? "#000000"
       : pick(["#0a0a12", "#0d0208", "#04121a", "#12060a", "#080810"]);
@@ -701,36 +706,34 @@
         ))
       );
 
+      const liveRender = () => { if (!state.anim.playing) render(); };
       if (layer.type === "hplane") {
-        card.appendChild(fieldRow("Höhe (m)", numberInputF(layer.elevation, -1000, 1000, (v) => {
-          layer.elevation = v; render();
-        })));
-        card.appendChild(fieldRow("Zellgröße (m)", numberInputF(layer.cellM, 0.01, 1000, (v) => {
-          layer.cellM = Math.max(0.01, v); render();
-        })));
-        card.appendChild(fieldRow("Ausdehnung (m)", numberInputF(layer.extentM, 1, 100000, (v) => {
-          layer.extentM = Math.max(1, v); render();
-        })));
+        card.appendChild(sliderRow("Höhe", layer.elevation, -3, 8, 0.1, "m", (v) => {
+          layer.elevation = v; liveRender();
+        }));
+        card.appendChild(sliderRow("Zellgröße", layer.cellM, 0.1, 5, 0.1, "m", (v) => {
+          layer.cellM = Math.max(0.1, v); liveRender();
+        }));
+        card.appendChild(sliderRow("Ausdehnung", layer.extentM, 5, 100, 1, "m", (v) => {
+          layer.extentM = Math.max(5, v); liveRender();
+        }));
       } else if (layer.type === "wall") {
-        card.appendChild(fieldRow("Entfernung (m)", numberInputF(layer.distance, 0.1, 100000, (v) => {
-          layer.distance = Math.max(0.1, v); render();
-        })));
-        card.appendChild(fieldRow("Höhe (m)", numberInputF(layer.heightM, 0.1, 10000, (v) => {
-          layer.heightM = Math.max(0.1, v); render();
-        })));
-        card.appendChild(fieldRow("Breite (m)", numberInputF(layer.widthM, 0.1, 10000, (v) => {
-          layer.widthM = Math.max(0.1, v); render();
-        })));
-        card.appendChild(fieldRow("Zellgröße (m)", numberInputF(layer.cellM, 0.01, 1000, (v) => {
-          layer.cellM = Math.max(0.01, v); render();
-        })));
+        card.appendChild(sliderRow("Entfernung", layer.distance, 0.5, 30, 0.5, "m", (v) => {
+          layer.distance = Math.max(0.5, v); liveRender();
+        }));
+        card.appendChild(sliderRow("Höhe", layer.heightM, 0.5, 10, 0.5, "m", (v) => {
+          layer.heightM = Math.max(0.5, v); liveRender();
+        }));
+        card.appendChild(sliderRow("Breite", layer.widthM, 0.5, 20, 0.5, "m", (v) => {
+          layer.widthM = Math.max(0.5, v); liveRender();
+        }));
+        card.appendChild(sliderRow("Zellgröße", layer.cellM, 0.1, 5, 0.1, "m", (v) => {
+          layer.cellM = Math.max(0.1, v); liveRender();
+        }));
       } else {
-        card.appendChild(
-          fieldRow("Zellgröße", numberInput(layer.cellSize, 4, 4000, (v) => {
-            layer.cellSize = Math.max(4, Math.round(v));
-            render();
-          }))
-        );
+        card.appendChild(sliderRow("Zellgröße", layer.cellSize, 8, 400, 1, "px", (v) => {
+          layer.cellSize = Math.max(4, Math.round(v)); liveRender();
+        }));
       }
 
       card.appendChild(
@@ -935,6 +938,33 @@
       onChange(v);
     });
     return inp;
+  }
+  // A labeled slider with a live value readout -- the main control for the
+  // metric fields (height, cell size, distance, ...), touch-friendly.
+  function sliderRow(labelText, value, min, max, step, unit, onChange) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const label = document.createElement("label");
+    label.textContent = labelText;
+    const range = document.createElement("input");
+    range.type = "range";
+    range.min = min; range.max = max; range.step = step;
+    range.value = value;
+    const val = document.createElement("span");
+    val.style.minWidth = "52px";
+    val.style.textAlign = "right";
+    val.style.fontSize = "12px";
+    val.style.color = "var(--text-dim)";
+    const decimals = step < 1 ? 1 : 0;
+    const fmt = (v) => v.toFixed(decimals) + (unit ? " " + unit : "");
+    val.textContent = fmt(Number(value));
+    range.addEventListener("input", () => {
+      const v = Number(range.value);
+      val.textContent = fmt(v);
+      onChange(v);
+    });
+    row.append(label, range, val);
+    return row;
   }
   // A labeled X/Y number-input pair bound to layer[xKey]/layer[yKey];
   // stashes the inputs on the layer so canvas drags can keep them in sync.
@@ -1240,6 +1270,7 @@
 
   // ---------- Init ----------
   bgColorInput.value = state.bgColor;
+  syncCameraInputs();
   animSpeedVal.textContent = state.anim.speed.toFixed(1) + "×";
   syncResolutionInputs();
   resizeCanvas();
