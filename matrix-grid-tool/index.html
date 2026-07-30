@@ -579,14 +579,12 @@
         color: i === 0 ? "#ffffff" : s.color,
         opacity: i === 0 ? 100 : s.opacity,
       });
-      // Colourful filled grid fields tend toward the UPPER planes; the
-      // lower/base planes stay as plain white/soft line grids.
-      if (i >= Math.ceil(n * 0.55)) {
-        l.accentEvery = 2;
-        l.accentMode = "cells";
-        l.accentColor = s.color;
-        l.accentOpacity = 42;
-      }
+      // Colourful filled grid fields on EVERY plane (checkerboard-ish),
+      // so the colour is spread across the whole stack, not just the top.
+      l.accentEvery = 2;
+      l.accentMode = "cells";
+      l.accentColor = i === 0 ? "#8fdcff" : s.color;
+      l.accentOpacity = 40;
       arr.push(l);
     }
     return arr;
@@ -730,12 +728,11 @@
       ov.distance = +rnd(2, 12).toFixed(1); ov.heightM = +rnd(2, 5).toFixed(1);
       ov.widthM = +rnd(4, 10).toFixed(1);
     }
-    // Colourful filled fields favour the upper planes (higher elevation).
-    const high = type === "hplane" && ov.elevation > 3;
-    if (chance(high ? 0.7 : 0.15)) {
+    // Colourful filled fields everywhere (all planes, not just the top).
+    if (chance(0.7)) {
       ov.accentEvery = pick([2, 3]);
-      ov.accentMode = high ? "cells" : (chance(0.5) ? "lines" : "cells");
-      ov.accentColor = high ? ov.color : pick(LAYER_HUES.concat(["#ffffff", "#ff3355"]));
+      ov.accentMode = "cells";
+      ov.accentColor = ov.color;
       ov.accentOpacity = 45;
     }
     state.layers.unshift(makeLayer(type, ov));
@@ -1055,12 +1052,11 @@
         widthM: +rnd(4, 10).toFixed(1),
         extentM: pick([30, 40, 60]),
       });
-      // Colourful filled fields tend toward the upper planes (higher i).
-      const upper = i >= Math.ceil(n * 0.55) && type === "hplane";
-      if (chance(upper ? 0.75 : 0.18)) {
+      // Colourful filled fields everywhere (all planes, not just the top).
+      if (chance(0.7)) {
         l.accentEvery = pick([2, 3]);
-        l.accentMode = upper ? "cells" : (chance(0.5) ? "lines" : "cells");
-        l.accentColor = upper ? style.color : pick(LAYER_HUES.concat(["#ffffff", "#ff3355"]));
+        l.accentMode = "cells";
+        l.accentColor = chance(0.5) ? l.color : pick(LAYER_HUES.concat(["#ffffff", "#ff3355"]));
         l.accentOpacity = rndInt(40, 70);
       }
       layers.push(l);
