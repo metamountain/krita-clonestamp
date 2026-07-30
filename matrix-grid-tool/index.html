@@ -355,6 +355,7 @@
       <h2>Jam (808)</h2>
       <div class="row" style="gap:6px;">
         <button id="playBtn" class="primary" style="flex:1 1 auto;">⏸ Pause</button>
+        <button id="colorBtn" title="Alle Ebenen neu einfärben" style="flex:0 0 auto;">🎨</button>
         <button id="kickBtn" title="Anstoßen" style="flex:0 0 auto;">💥</button>
         <button id="randomBtn" title="Neu würfeln" style="flex:0 0 auto;">🎲</button>
       </div>
@@ -680,6 +681,7 @@
   const layerEditorEl = document.getElementById("layerEditor");
   const addLayerBtn = document.getElementById("addLayer");
   const randomBtn = document.getElementById("randomBtn");
+  const colorBtn = document.getElementById("colorBtn");
   const clearBtn = document.getElementById("clearBtn");
   const qualityInput = document.getElementById("quality");
   const qualityVal = document.getElementById("qualityVal");
@@ -1068,6 +1070,22 @@
     render();
   }
 
+  // A vivid random colour, readable on a dark background.
+  function randomColor() {
+    const c = hslToRgb(Math.random(), 0.55 + Math.random() * 0.35, 0.5 + Math.random() * 0.2);
+    return rgbToHex(c.r, c.g, c.b);
+  }
+  // Recolour every layer (base plane included) with fresh random colours.
+  function randomizeColors() {
+    for (const l of state.layers) {
+      l.color = randomColor();
+      l.accentColor = randomColor();
+    }
+    renderLayerList();     // refresh chips
+    renderActiveEditor();  // refresh the active editor's colour pickers
+    render();
+  }
+
   // Reset to a single base plane (clear the stack).
   function clearLayers() {
     state.layers = [makeLayer("hplane", { color: "#ffffff", opacity: 100, cellM: 1, flowSpeed: 3 })];
@@ -1426,6 +1444,7 @@
 
   addLayerBtn.addEventListener("click", addLayer);
   randomBtn.addEventListener("click", randomizeScene);
+  colorBtn.addEventListener("click", randomizeColors);
   clearBtn.addEventListener("click", clearLayers);
 
   // ---------- Rendering ----------
