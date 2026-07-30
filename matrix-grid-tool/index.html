@@ -134,7 +134,30 @@
     font-weight: 600;
   }
   button.icon { padding: 6px 9px; }
-  input[type="range"] { flex: 1 1 auto; min-width: 90px; }
+  /* Custom, touch-friendly range control (bigger thumb than the default). */
+  input[type="range"] {
+    flex: 1 1 auto; min-width: 90px;
+    -webkit-appearance: none; appearance: none;
+    background: transparent; height: 22px; margin: 0;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px; border-radius: 4px;
+    background: var(--panel-2); border: 1px solid var(--border);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 20px; height: 20px; margin-top: -8px;
+    border-radius: 50%; background: var(--accent);
+    border: 2px solid rgba(255,255,255,.25);
+  }
+  input[type="range"]::-moz-range-track {
+    height: 6px; border-radius: 4px;
+    background: var(--panel-2); border: 1px solid var(--border);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 20px; height: 20px; border: 2px solid rgba(255,255,255,.25);
+    border-radius: 50%; background: var(--accent);
+  }
   input[type="color"] {
     width: 34px; height: 30px;
     border: 1px solid var(--border);
@@ -277,6 +300,35 @@
       border-right: 1px solid var(--border);
     }
     header { display: none; }
+  }
+
+  /* ---- Phone optimisation (portrait, ~360-430 CSS px wide) ---- */
+  @media (max-width: 560px) {
+    header { padding: 7px 12px; }
+    header h1 { font-size: 15px; }
+    header .sub { display: none; }
+    #stage { padding: 6px; }
+    #canvas { max-height: 40vh; }
+    #controls { padding: 10px 12px 96px; gap: 12px; }
+    section.panel { padding: 11px; }
+    section.panel h2 { margin-bottom: 8px; }
+    /* Stack label above its control so sliders span the full width. */
+    .row { margin-bottom: 12px; gap: 6px 8px; }
+    .row > label { flex-basis: 100%; min-width: 0; margin-bottom: 1px; font-size: 12px; }
+    input[type="range"] { min-width: 0; height: 30px; }
+    input[type="range"]::-webkit-slider-thumb { width: 28px; height: 28px; margin-top: -12px; }
+    input[type="range"]::-moz-range-thumb { width: 28px; height: 28px; }
+    select, input[type="number"], input[type="text"] { padding: 10px 9px; font-size: 15px; }
+    button { padding: 11px 12px; font-size: 14px; }
+    /* Bigger tap targets in the layer list */
+    #layerList { max-height: 46vh; }
+    .lrow { padding: 9px 10px; }
+    .lrow .lname { font-size: 14px; }
+    .lrow .lbtn { padding: 8px 10px; font-size: 16px; }
+    .lrow .chip { width: 16px; height: 16px; }
+    .swatch { width: 30px; height: 30px; }
+    input[type="color"] { width: 40px; height: 34px; }
+    details.fold > summary { padding: 13px 12px; }
   }
 </style>
 </head>
