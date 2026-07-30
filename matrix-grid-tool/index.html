@@ -155,7 +155,10 @@
   .swatch[data-c="#808080"] { background: #808080; }
 
   /* Compact one-line layer rows -- scales to many layers. */
-  #layerList { display: flex; flex-direction: column; gap: 4px; }
+  #layerList {
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 320px; overflow-y: auto;
+  }
   .lrow {
     display: flex;
     align-items: center;
@@ -210,6 +213,38 @@
     font-size: 12px;
     margin-top: 4px;
   }
+  /* Collapsible base-settings group */
+  details.fold {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0;
+    overflow: hidden;
+  }
+  details.fold > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 12px;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  details.fold > summary::-webkit-details-marker { display: none; }
+  details.fold > summary::before { content: "▸"; font-size: 11px; }
+  details.fold[open] > summary::before { content: "▾"; }
+  details.fold > .fold-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 14px; }
+  details.fold .subpanel h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--text-dim); margin: 0 0 8px;
+  }
+  details.fold .subpanel {
+    border-top: 1px solid var(--border); padding-top: 12px;
+  }
+  details.fold .subpanel:first-child { border-top: none; padding-top: 0; }
   footer {
     padding: 10px 14px 20px;
     color: var(--text-dim);
@@ -256,68 +291,16 @@
 
   <div id="controls">
 
-    <section class="panel">
-      <h2>Auflösung</h2>
-      <div class="row">
-        <label for="presetSelect">Preset</label>
-        <select id="presetSelect"></select>
-      </div>
-      <div class="row">
-        <label>Breite</label>
-        <input type="number" id="widthInput" min="16" max="8000" step="1">
-        <label style="min-width:auto;">Höhe</label>
-        <input type="number" id="heightInput" min="16" max="8000" step="1">
-      </div>
-      <div class="row">
-        <button id="swapOrientation">⇄ Hoch-/Querformat tauschen</button>
-      </div>
-    </section>
+    <!-- ===== MODIFIKATOREN (Hauptfokus) ===== -->
 
     <section class="panel">
-      <h2>Hintergrund</h2>
-      <div class="row">
-        <label>Farbe</label>
-        <div class="swatches">
-          <button class="swatch" data-c="#ffffff" title="Weiß"></button>
-          <button class="swatch" data-c="#000000" title="Schwarz"></button>
-          <button class="swatch" data-c="#808080" title="Grau"></button>
-        </div>
-        <input type="color" id="bgColor" value="#000000">
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2>Kamera (Perspektive)</h2>
-      <div class="row">
-        <label>Standpunkthöhe</label>
-        <input type="range" id="camEye" min="0" max="6" step="0.05" value="1.6">
-        <span id="camEyeVal" style="min-width:48px;text-align:right;color:var(--text-dim);font-size:12px;">1.6 m</span>
-      </div>
-      <div class="row">
-        <label>Brennweite</label>
-        <input type="range" id="camFocal" min="12" max="200" step="1" value="50">
-        <span id="camFocalVal" style="min-width:52px;text-align:right;color:var(--text-dim);font-size:12px;">50 mm</span>
-      </div>
-      <div class="row">
-        <label>Horizont anzeigen</label>
-        <input type="checkbox" id="camHorizon">
-      </div>
-      <div class="hint">Wirkt auf die Perspektiv-Ebenen (Horizontale Ebene / Vertikale Wand). Blick ist waagerecht, der Horizont liegt auf Augenhöhe in der Bildmitte.</div>
-    </section>
-
-    <section class="panel">
-      <h2>Animation</h2>
+      <h2>Physik &amp; Animation</h2>
       <div class="row">
         <button id="playBtn" class="primary" style="min-width:120px;">⏸ Pause</button>
         <label style="min-width:auto;">Tempo</label>
         <input type="range" id="animSpeed" min="0" max="4" step="0.05" value="1">
         <span id="animSpeedVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">1.0×</span>
       </div>
-      <div class="hint">Bewegt die Raster (Bewegung je Ebene einstellbar). Zum Exportieren ggf. pausieren.</div>
-    </section>
-
-    <section class="panel">
-      <h2>Physik (Stapel)</h2>
       <div class="row">
         <label>Physik an</label>
         <input type="checkbox" id="physOn" checked>
@@ -343,23 +326,79 @@
         <input type="range" id="physDamping" min="0.2" max="4" step="0.1" value="1.6">
         <span id="physDampingVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">1.6</span>
       </div>
-      <div class="hint">Die horizontalen Ebenen verhalten sich wie ein physischer Stapel: Gravitation zieht sie nach unten, Abstoßung drückt sie auseinander, Dichte bestimmt den Ruheabstand. 💥 stößt den Stapel an. Läuft nur bei aktiver Animation.</div>
+      <div class="hint">Die horizontalen Ebenen sind ein physischer Stapel: Gravitation zieht nach unten, Abstoßung drückt auseinander, Dichte bestimmt den Ruheabstand. 💥 stößt an. Läuft nur bei aktiver Animation.</div>
     </section>
 
     <section class="panel">
       <h2>Ebenen</h2>
-      <div id="layerList"></div>
-      <div class="row" style="margin-top:10px; gap:6px;">
+      <div class="row" style="margin-bottom:8px; gap:6px;">
         <button id="addLayer" class="primary" style="flex:1 1 auto;">+ Ebene</button>
-        <button id="randomBtn" title="Zufällige Konstellation" style="flex:0 0 auto;">🎲 Zufall</button>
+        <button id="randomBtn" title="Viele zufällige Ebenen" style="flex:0 0 auto;">🎲 Zufall</button>
+        <button id="clearBtn" title="Bis auf eine Ebene leeren" style="flex:0 0 auto;">🗑</button>
       </div>
-      <div class="hint">Tippe auf eine Zeile, um die Ebene zu bearbeiten (unten). 👁 blendet ein/aus. 🎲 Zufall würfelt eine komplette neue Konstellation.</div>
+      <div id="layerList"></div>
+      <div class="hint">Tippe eine Zeile an, um sie unten zu bearbeiten. 👁 blendet einzeln ein/aus. 🎲 würfelt viele Ebenen auf einmal.</div>
     </section>
 
     <section class="panel">
       <h2>Aktive Ebene</h2>
       <div id="layerEditor"></div>
     </section>
+
+    <!-- ===== GRUNDEINSTELLUNGEN (eingeklappt) ===== -->
+
+    <details class="fold">
+      <summary>Grundeinstellungen (Auflösung, Kamera, Hintergrund)</summary>
+      <div class="fold-body">
+        <div class="subpanel">
+          <h3>Auflösung</h3>
+          <div class="row">
+            <label for="presetSelect">Preset</label>
+            <select id="presetSelect"></select>
+          </div>
+          <div class="row">
+            <label>Breite</label>
+            <input type="number" id="widthInput" min="16" max="8000" step="1">
+            <label style="min-width:auto;">Höhe</label>
+            <input type="number" id="heightInput" min="16" max="8000" step="1">
+          </div>
+          <div class="row">
+            <button id="swapOrientation">⇄ Hoch-/Querformat tauschen</button>
+          </div>
+        </div>
+
+        <div class="subpanel">
+          <h3>Kamera (Perspektive)</h3>
+          <div class="row">
+            <label>Standpunkthöhe</label>
+            <input type="range" id="camEye" min="0" max="6" step="0.05" value="1.6">
+            <span id="camEyeVal" style="min-width:48px;text-align:right;color:var(--text-dim);font-size:12px;">1.6 m</span>
+          </div>
+          <div class="row">
+            <label>Brennweite</label>
+            <input type="range" id="camFocal" min="12" max="200" step="1" value="50">
+            <span id="camFocalVal" style="min-width:52px;text-align:right;color:var(--text-dim);font-size:12px;">50 mm</span>
+          </div>
+          <div class="row">
+            <label>Horizont anzeigen</label>
+            <input type="checkbox" id="camHorizon">
+          </div>
+        </div>
+
+        <div class="subpanel">
+          <h3>Hintergrund</h3>
+          <div class="row">
+            <label>Farbe</label>
+            <div class="swatches">
+              <button class="swatch" data-c="#ffffff" title="Weiß"></button>
+              <button class="swatch" data-c="#000000" title="Schwarz"></button>
+              <button class="swatch" data-c="#808080" title="Grau"></button>
+            </div>
+            <input type="color" id="bgColor" value="#000000">
+          </div>
+        </div>
+      </div>
+    </details>
 
     <section class="panel">
       <h2>Export</h2>
@@ -480,7 +519,7 @@
     physics: { enabled: true, density: 0.5, gravity: 6, repulsion: 16, damping: 1.6 },
     clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).
-    layers: makeStack(6),
+    layers: makeStack(10),
     activeLayerId: null,
   };
   state.activeLayerId = state.layers[0].id;
@@ -501,6 +540,7 @@
   const layerEditorEl = document.getElementById("layerEditor");
   const addLayerBtn = document.getElementById("addLayer");
   const randomBtn = document.getElementById("randomBtn");
+  const clearBtn = document.getElementById("clearBtn");
   const qualityInput = document.getElementById("quality");
   const qualityVal = document.getElementById("qualityVal");
   const exportBtn = document.getElementById("exportBtn");
@@ -623,7 +663,7 @@
       if (l.vel > 30) l.vel = 30; else if (l.vel < -30) l.vel = -30; // stability clamp
       l.elevation += l.vel * dt;
       if (l.elevation < 0) { l.elevation = 0; if (l.vel < 0) l.vel = -l.vel * 0.3; }
-      if (l.elevation > 12) { l.elevation = 12; if (l.vel > 0) l.vel = -l.vel * 0.3; }
+      if (l.elevation > 30) { l.elevation = 30; if (l.vel > 0) l.vel = -l.vel * 0.3; }
     }
   }
 
@@ -777,23 +817,24 @@
     state.bgColor = bg;
     bgColorInput.value = bg;
 
-    const n = rndInt(1, 4);
+    // Many layers at once -- a rich stack. Mostly horizontal planes (so the
+    // physics stack is lively), occasionally a wall thrown in.
+    const n = rndInt(8, 14);
     const layers = [];
     for (let i = 0; i < n; i += 1) {
-      // first layer is always the ground floor; others vary
-      const type = i === 0 ? "hplane" : pick(["hplane", "hplane", "wall", "parallel-h", "parallel-v"]);
+      const type = i === 0 ? "hplane" : pick(["hplane", "hplane", "hplane", "hplane", "wall"]);
       const style = autoStyle(i);
       let fs = 0;
       if (chance(0.85)) { fs = +rnd(1.5, 8).toFixed(1); if (chance(0.2)) fs = -fs; }
       const l = makeLayer(type, {
-        color: chance(0.15) ? "#ffffff" : style.color,
+        color: chance(0.12) ? "#ffffff" : style.color,
         opacity: chance(0.3) ? 100 : style.opacity,
         flowSpeed: fs,
         lineWidth: rndInt(1, 4),
-        cellM: pick([0.5, 1, 1, 2]),
+        cellM: pick([0.5, 1, 1, 1, 2]),
         cellSize: pick([80, 120, 160, 200]),
-        elevation: type === "hplane" ? (i === 0 && chance(0.6) ? 0 : +rnd(0, 4).toFixed(1)) : 0,
-        distance: +rnd(2, 10).toFixed(1),
+        elevation: type === "hplane" ? +rnd(0, i * 1.1).toFixed(1) : 0,
+        distance: +rnd(2, 12).toFixed(1),
         heightM: +rnd(2, 5).toFixed(1),
         widthM: +rnd(4, 10).toFixed(1),
         extentM: pick([30, 40, 60]),
@@ -808,6 +849,15 @@
     }
     state.layers = layers;
     state.activeLayerId = layers[0].id;
+    renderLayerList();
+    renderActiveEditor();
+    render();
+  }
+
+  // Reset to a single base plane (clear the stack).
+  function clearLayers() {
+    state.layers = [makeLayer("hplane", { color: "#ffffff", opacity: 100, cellM: 1, flowSpeed: 3 })];
+    state.activeLayerId = state.layers[0].id;
     renderLayerList();
     renderActiveEditor();
     render();
@@ -1161,6 +1211,7 @@
 
   addLayerBtn.addEventListener("click", addLayer);
   randomBtn.addEventListener("click", randomizeScene);
+  clearBtn.addEventListener("click", clearLayers);
 
   // ---------- Rendering ----------
   function resizeCanvas() {

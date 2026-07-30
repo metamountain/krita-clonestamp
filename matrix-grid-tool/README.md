@@ -15,6 +15,13 @@ the same repo.
 Open `index.html` directly in any modern browser (desktop or mobile —
 works fine over `file://`, no server or install required).
 
+The UI puts the **modifiers first**: **Physik & Animation** and the
+**Ebenen** list/editor are the main workspace at the top. The rarely-changed
+base settings (Auflösung, Kamera, Hintergrund) are folded away in the
+collapsible **Grundeinstellungen** section near the bottom — the defaults
+are fine for most work. The tool opens on a **10-plane stack**; **🎲 Zufall**
+rolls a whole batch of random layers at once, and **🗑** clears back to one.
+
 1. **Auflösung**: pick a resolution preset (default 5:4 portrait,
    1536×1920) or type a custom width/height. The swap button flips
    portrait/landscape.
