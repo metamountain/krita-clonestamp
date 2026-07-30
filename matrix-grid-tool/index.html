@@ -265,7 +265,7 @@
           <button class="swatch" data-c="#000000" title="Schwarz"></button>
           <button class="swatch" data-c="#808080" title="Grau"></button>
         </div>
-        <input type="color" id="bgColor" value="#ffffff">
+        <input type="color" id="bgColor" value="#000000">
       </div>
     </section>
 
@@ -289,12 +289,23 @@
     </section>
 
     <section class="panel">
+      <h2>Animation</h2>
+      <div class="row">
+        <button id="playBtn" class="primary" style="min-width:120px;">⏸ Pause</button>
+        <label style="min-width:auto;">Tempo</label>
+        <input type="range" id="animSpeed" min="0" max="4" step="0.05" value="1">
+        <span id="animSpeedVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">1.0×</span>
+      </div>
+      <div class="hint">Bewegt die Raster (Bewegung je Ebene einstellbar). Zum Exportieren ggf. pausieren.</div>
+    </section>
+
+    <section class="panel">
       <h2>Ebenen</h2>
       <div id="layerList"></div>
       <div class="row" style="margin-top:10px;">
-        <button id="addLayer">+ Ebene hinzufügen</button>
+        <button id="addLayer" class="primary" style="width:100%;">+ Ebene hinzufügen</button>
       </div>
-      <div class="hint">Klick auf eine Ebene macht sie aktiv (blau). Flache Ebenen (Parallel) lassen sich per Drag in der Vorschau verschieben; Perspektiv-Ebenen werden über ihre Meter-Felder gesteuert. Standard: eine horizontale + eine vertikale Parallel-Ebene mit gleicher Zellgröße ergeben ein quadratisches Grundraster.</div>
+      <div class="hint">Neue Ebenen bekommen automatisch eine passende Farbe (Basisgitter weiß, höhere/weiter entfernte Gitter dezenter). Klick auf eine Ebene macht sie aktiv (blau). Flache "Parallel"-Ebenen lassen sich per Drag verschieben; Perspektiv-Ebenen werden über ihre Meter-Felder gesteuert.</div>
     </section>
 
     <section class="panel">
@@ -358,6 +369,7 @@
       accentMode: "lines", // 'lines' | 'cells'
       accentColor: "#d02020",
       accentOpacity: 100,
+      flowSpeed: 0,        // motion: metres/s (perspective) or px/s (flat)
       lineWidth: 3,
       color: "#000000",
       opacity: 100,
@@ -365,6 +377,19 @@
       originY: 0,
       visible: true,
     }, overrides || {});
+  }
+
+  // Auto-styling for new layers: the base grid is bright white; each
+  // further grid takes a soft hue (readable on black) and fades a bit,
+  // so higher / more distant planes read as more subtle. "mit Sinn":
+  // colour by index, opacity down with height/index.
+  const LAYER_HUES = ["#8fdcff", "#ff9ecb", "#a6f0a6", "#ffd27f", "#c9a9ff", "#9fe8d8"];
+  function autoStyle(index) {
+    if (index <= 0) return { color: "#ffffff", opacity: 100 };
+    return {
+      color: LAYER_HUES[(index - 1) % LAYER_HUES.length],
+      opacity: Math.max(28, 92 - index * 12),
+    };
   }
 
   const TYPE_LABELS = {
@@ -377,12 +402,13 @@
   const state = {
     width: PRESETS[0].w,
     height: PRESETS[0].h,
-    bgColor: "#ffffff",
+    bgColor: "#000000",
     camera: { eye: 1.6, focal: 50, showHorizon: false },
+    anim: { playing: true, speed: 1 },
+    clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).
     layers: [
-      makeLayer("parallel-v", { cellSize: 160 }),
-      makeLayer("parallel-h", { cellSize: 160 }),
+      makeLayer("hplane", { color: "#ffffff", opacity: 100, cellM: 1, flowSpeed: 3 }),
     ],
     activeLayerId: null,
   };
@@ -406,6 +432,9 @@
   const camEyeInput = document.getElementById("camEye");
   const camFocalInput = document.getElementById("camFocal");
   const camHorizonInput = document.getElementById("camHorizon");
+  const playBtn = document.getElementById("playBtn");
+  const animSpeedInput = document.getElementById("animSpeed");
+  const animSpeedVal = document.getElementById("animSpeedVal");
 
   // ---------- Camera ----------
   camEyeInput.addEventListener("change", () => {
@@ -423,6 +452,40 @@
   camHorizonInput.addEventListener("change", () => {
     state.camera.showHorizon = camHorizonInput.checked;
     render();
+  });
+
+  // ---------- Animation loop ----------
+  let animRAF = null;
+  let animLastTs = null;
+  function animTick(ts) {
+    if (animLastTs == null) animLastTs = ts;
+    const dt = (ts - animLastTs) / 1000;
+    animLastTs = ts;
+    state.clock += dt * state.anim.speed;
+    render();
+    if (state.anim.playing) animRAF = requestAnimationFrame(animTick);
+    else animRAF = null;
+  }
+  function playAnim() {
+    if (state.anim.playing) return;
+    state.anim.playing = true;
+    animLastTs = null;
+    playBtn.textContent = "⏸ Pause";
+    animRAF = requestAnimationFrame(animTick);
+  }
+  function pauseAnim() {
+    state.anim.playing = false;
+    if (animRAF) cancelAnimationFrame(animRAF);
+    animRAF = null;
+    playBtn.textContent = "▶ Abspielen";
+  }
+  playBtn.addEventListener("click", () => {
+    if (state.anim.playing) pauseAnim(); else playAnim();
+  });
+  animSpeedInput.addEventListener("input", () => {
+    state.anim.speed = Number(animSpeedInput.value);
+    animSpeedVal.textContent = state.anim.speed.toFixed(1) + "×";
+    if (!state.anim.playing) render();
   });
 
   // ---------- Presets ----------
@@ -505,7 +568,19 @@
   function getLayer(id) { return state.layers.find((l) => l.id === id); }
 
   function addLayer() {
-    const layer = makeLayer("parallel-h", { cellSize: 160 });
+    // One click: add a horizontal perspective plane, auto-styled so it
+    // reads sensibly against the others -- higher elevation + a softer,
+    // dimmer colour the more planes there already are, and it inherits
+    // the flow so it's alive immediately.
+    const index = state.layers.length;
+    const style = autoStyle(index);
+    const layer = makeLayer("hplane", {
+      elevation: index * 1.5,
+      cellM: 1,
+      flowSpeed: 3,
+      color: style.color,
+      opacity: style.opacity,
+    });
     state.layers.unshift(layer); // new layer goes on top
     state.activeLayerId = layer.id;
     renderLayerList();
@@ -651,6 +726,31 @@
       });
       opRow.append(opLabel, opRange, opVal);
       card.appendChild(opRow);
+
+      // ---- Bewegung / motion ----
+      const isPersp = layer.type === "hplane" || layer.type === "wall";
+      const flowRow = document.createElement("div");
+      flowRow.className = "row";
+      const flowLabel = document.createElement("label");
+      flowLabel.textContent = isPersp ? "Bewegung (m/s)" : "Bewegung (px/s)";
+      const flowRange = document.createElement("input");
+      flowRange.type = "range";
+      const flowMax = isPersp ? 12 : 300;
+      flowRange.min = -flowMax; flowRange.max = flowMax;
+      flowRange.step = isPersp ? 0.5 : 10;
+      flowRange.value = layer.flowSpeed;
+      const flowVal = document.createElement("span");
+      flowVal.style.minWidth = "42px";
+      flowVal.style.fontSize = "12px";
+      flowVal.style.color = "var(--text-dim)";
+      flowVal.textContent = layer.flowSpeed;
+      flowRange.addEventListener("input", () => {
+        layer.flowSpeed = Number(flowRange.value);
+        flowVal.textContent = layer.flowSpeed;
+        if (!state.anim.playing) render();
+      });
+      flowRow.append(flowLabel, flowRange, flowVal);
+      card.appendChild(flowRow);
 
       // ---- Accent / Betonung (every Nth line or cell) ----
       card.appendChild(fieldRow("Betonung", numberInput(layer.accentEvery, 0, 100, (v) => {
@@ -868,15 +968,16 @@
     const cell = layer.cellSize;
     if (cell <= 0) return;
     const N = layer.accentEvery >= 2 ? layer.accentEvery : 0; // flat: line accent only
+    const flow = state.clock * (layer.flowSpeed || 0); // px scroll
     const base = [], acc = [];
     if (layer.type === "parallel-h") {
-      const start = mod(layer.originY, cell) - cell;
+      const start = mod(layer.originY + flow, cell) - cell;
       let i = 0;
       for (let y = start; y <= state.height + cell; y += cell, i += 1) {
         (N && mod(i, N) === 0 ? acc : base).push([0, y + 0.5, state.width, y + 0.5]);
       }
     } else {
-      const start = mod(layer.originX, cell) - cell;
+      const start = mod(layer.originX + flow, cell) - cell;
       let i = 0;
       for (let x = start; x <= state.width + cell; x += cell, i += 1) {
         (N && mod(i, N) === 0 ? acc : base).push([x + 0.5, 0, x + 0.5, state.height]);
@@ -897,26 +998,29 @@
     const cellsMode = N && layer.accentMode === "cells";
     const base = [], acc = [], quads = [];
     const halfW = J * cell;
+    // Animation: scroll the cross-grid toward the viewer by a phase in
+    // [0,cell) -- the classic moving "game floor". Depth lines are fixed.
+    const phase = mod(state.clock * (layer.flowSpeed || 0), cell);
     // depth lines (run into Z at fixed X)
     for (let j = -J; j <= J; j += 1) {
       const X = j * cell;
       const p0 = project(X, e, ZNEAR), p1 = project(X, e, ext);
       (linesMode && mod(j, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
-    // cross lines (run across X at fixed Z)
-    for (let k = 1; k <= K; k += 1) {
-      const Z = k * cell;
-      if (Z < ZNEAR) continue;
+    // cross lines (run across X at fixed Z), scrolled by phase
+    for (let k = 1; k <= K + 1; k += 1) {
+      const Z = k * cell - phase;
+      if (Z < ZNEAR || Z > ext) continue;
       const p0 = project(-halfW, e, Z), p1 = project(halfW, e, Z);
       (linesMode && mod(k, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     if (cellsMode) {
       for (let j = -J; j < J; j += 1) {
         if (mod(j, N) !== 0) continue;
-        for (let k = 1; k < K; k += 1) {
+        for (let k = 1; k <= K + 1; k += 1) {
           if (mod(k, N) !== 0) continue;
-          const Z0 = k * cell, Z1 = (k + 1) * cell;
-          if (Z0 < ZNEAR) continue;
+          const Z0 = k * cell - phase, Z1 = Z0 + cell;
+          if (Z0 < ZNEAR || Z0 > ext) continue;
           const X0 = j * cell, X1 = (j + 1) * cell;
           quads.push([proj2(X0, e, Z0), proj2(X1, e, Z0), proj2(X1, e, Z1), proj2(X0, e, Z1)]);
         }
@@ -938,24 +1042,30 @@
     const cellsMode = N && layer.accentMode === "cells";
     const base = [], acc = [], quads = [];
     const halfW = Jw * cell;
+    // Animation: scroll the wall's horizontal grid vertically by a phase
+    // in [0,cell); vertical lines stay put.
+    const phase = mod(state.clock * (layer.flowSpeed || 0), cell);
     // vertical lines (fixed X, Y from 0..H)
     for (let j = -Jw; j <= Jw; j += 1) {
       const X = j * cell;
       const p0 = project(X, 0, d), p1 = project(X, H, d);
       (linesMode && mod(j, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
-    // horizontal lines (fixed Y, X from -halfW..halfW)
-    for (let k = 0; k <= Kw; k += 1) {
-      const Y = k * cell;
+    // horizontal lines (fixed Y, X from -halfW..halfW), scrolled by phase
+    for (let k = 0; k <= Kw + 1; k += 1) {
+      const Y = k * cell - phase;
+      if (Y < 0 || Y > H) continue;
       const p0 = project(-halfW, Y, d), p1 = project(halfW, Y, d);
       (linesMode && mod(k, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     if (cellsMode) {
       for (let j = -Jw; j < Jw; j += 1) {
         if (mod(j, N) !== 0) continue;
-        for (let k = 0; k < Kw; k += 1) {
+        for (let k = 0; k <= Kw + 1; k += 1) {
           if (mod(k, N) !== 0) continue;
-          const X0 = j * cell, X1 = (j + 1) * cell, Y0 = k * cell, Y1 = (k + 1) * cell;
+          const Y0 = k * cell - phase, Y1 = Y0 + cell;
+          if (Y0 < 0 || Y0 > H) continue;
+          const X0 = j * cell, X1 = (j + 1) * cell;
           quads.push([proj2(X0, Y0, d), proj2(X1, Y0, d), proj2(X1, Y1, d), proj2(X0, Y1, d)]);
         }
       }
@@ -1073,10 +1183,16 @@
   });
 
   // ---------- Init ----------
+  bgColorInput.value = state.bgColor;
+  animSpeedVal.textContent = state.anim.speed.toFixed(1) + "×";
   syncResolutionInputs();
   resizeCanvas();
   renderLayerList();
   render();
+  if (state.anim.playing) {
+    playBtn.textContent = "⏸ Pause";
+    animRAF = requestAnimationFrame(animTick);
+  }
 })();
 </script>
 </body>

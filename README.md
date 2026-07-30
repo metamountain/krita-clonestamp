@@ -65,7 +65,7 @@ brush automatically; re-enable and resample there.
 | `python-plugin/` | The installable plugin (pure Python on Krita's `libkis` scripting API) and the packaged `clonestamp.zip`. |
 | `Tool-plugin/` | A native C++ `KisTool` implementation of the same tool, intended for eventual upstream submission to Krita. Not installable on its own — it only builds inside a full Krita source checkout (see `Tool-plugin/NOTE.md`). |
 | `docs/` | Development history, build/toolchain notes, and per-change test documentation. |
-| `matrix-grid-tool/` | A standalone, unrelated browser tool (not a Krita plugin) that generates black/white or gray/black grid reference images — flat square grids plus measurement-based camera perspective (ground planes and walls in metres, via a pinhole camera) — for AI image generation. See its own README. |
+| `matrix-grid-tool/` | A standalone, unrelated browser tool (not a Krita plugin) that generates grid reference images — animated, measurement-based camera perspective (ground planes and walls in metres, via a pinhole camera) plus flat square grids — for AI image generation. See its own README. |
 
 ## Why two implementations?
 
