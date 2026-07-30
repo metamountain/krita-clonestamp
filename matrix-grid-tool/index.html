@@ -275,7 +275,7 @@
       <div class="row" style="margin-top:10px;">
         <button id="addLayer">+ Ebene hinzufügen</button>
       </div>
-      <div class="hint">Aktive Ebene (blau markiert) lässt sich per Drag direkt in der Vorschau verschieben. Standard: eine horizontale + eine vertikale Ebene mit gleicher Zellgröße ergeben ein quadratisches Grid. Optional: Typ auf Radial/Konzentrisch stellen für perspektivische Overlays.</div>
+      <div class="hint">Aktive Ebene (blau markiert) lässt sich per Drag direkt in der Vorschau verschieben. Standard: eine horizontale + eine vertikale Ebene mit gleicher Zellgröße ergeben ein quadratisches Grid. Optional: Typ auf "Tiefenraster" stellen — Reihen bleiben parallel zum Betrachter, nur die Tiefenlinien führen in die Tiefe zu einem einzigen Fluchtpunkt.</div>
     </section>
 
     <section class="panel">
@@ -309,36 +309,36 @@
     { name: "Custom",                     w: null, h: null },
   ];
 
-  // Layer types -- default/primary is the flat square grid ('parallel-h'
-  // + 'parallel-v', same cell size on both = square fields). 'radial'
-  // (rays from a vanishing point) and 'concentric' (rings) are additional
-  // options for perspective/moiré overlays, not the default.
+  // Layer types:
+  //  - 'parallel-h' / 'parallel-v': the default flat square grid (same
+  //    cell size on both = square fields).
+  //  - 'depth': a proper one-point depth/floor grid -- the converging
+  //    ("Tiefenlinien") lines lead into the depth toward a single
+  //    vanishing point, while the ("Reihen") rows stay strictly
+  //    horizontal, parallel to the viewer, just compressing towards the
+  //    horizon. Not a starburst radiating in every direction.
   let layerSeq = 0;
   function makeLayer(type, overrides) {
     layerSeq += 1;
     return Object.assign({
       id: "l" + layerSeq,
       type: type,
-      cellSize: 160,      // ring spacing (concentric) / line spacing (parallel)
-      lineCount: 28,       // ray count (radial / radial2, shared by both VPs)
-      rotation: 0,          // degrees (radial; VP1 for radial2)
-      rotation2: 0,          // degrees, VP2 (radial2 only)
+      cellSize: 160,      // line spacing (parallel types)
+      lineCount: 12,       // converging column count (depth)
+      rowCount: 10,          // horizontal row count (depth)
+      compression: 0.75,      // 0..1, how fast rows compress toward the horizon (depth)
+      baseY: null,             // near/baseline row Y (depth); filled in on first use
       lineWidth: 3,
       color: "#000000",
       opacity: 100,
       originX: 0,
       originY: 0,
-      originX2: 0,         // VP2 position (radial2 only)
-      originY2: 0,
-      activeVP: "1",       // which point canvas-drag moves (radial2 only)
       visible: true,
     }, overrides || {});
   }
 
   const TYPE_LABELS = {
-    radial: "Radial (Perspektive)",
-    radial2: "2 Fluchtpunkte",
-    concentric: "Konzentrisch",
+    depth: "Tiefenraster (Perspektive)",
     "parallel-h": "Parallel – horizontal",
     "parallel-v": "Parallel – vertikal",
   };
@@ -512,15 +512,15 @@
       card.appendChild(
         fieldRow("Typ", selectInput(
           [["parallel-h", TYPE_LABELS["parallel-h"]], ["parallel-v", TYPE_LABELS["parallel-v"]],
-           ["radial", TYPE_LABELS.radial], ["radial2", TYPE_LABELS.radial2],
-           ["concentric", TYPE_LABELS.concentric]],
+           ["depth", TYPE_LABELS.depth]],
           layer.type,
           (v) => {
             layer.type = v;
-            if (v === "radial2" && layer.originX2 === 0 && layer.originY2 === 0) {
-              // sensible first guess: mirror VP1 to the other side, same height (horizon line)
-              layer.originX2 = state.width - layer.originX;
-              layer.originY2 = layer.originY;
+            if (v === "depth" && layer.baseY == null) {
+              // sensible first guess: vanishing point above center, baseline at the bottom edge
+              layer.originX = state.width / 2;
+              layer.originY = state.height * 0.35;
+              layer.baseY = state.height;
             }
             renderLayerList();
             render();
@@ -528,43 +528,50 @@
         ))
       );
 
-      if (layer.type === "radial" || layer.type === "radial2") {
+      if (layer.type === "depth") {
         card.appendChild(
-          fieldRow("Anzahl Linien", numberInput(layer.lineCount, 2, 360, (v) => {
+          fieldRow("Tiefenlinien", numberInput(layer.lineCount, 2, 200, (v) => {
             layer.lineCount = Math.max(2, Math.round(v));
             render();
           }))
         );
-      }
-      if (layer.type === "radial") {
         card.appendChild(
-          fieldRow("Rotation °", numberInput(layer.rotation, -360, 360, (v) => {
-            layer.rotation = Number(v) || 0;
+          fieldRow("Reihen", numberInput(layer.rowCount, 1, 100, (v) => {
+            layer.rowCount = Math.max(1, Math.round(v));
             render();
           }))
         );
-      } else if (layer.type === "radial2") {
+        const compRow = document.createElement("div");
+        compRow.className = "row";
+        const compLabel = document.createElement("label");
+        compLabel.textContent = "Kompression";
+        const compRange = document.createElement("input");
+        compRange.type = "range";
+        compRange.min = 30; compRange.max = 95; compRange.value = Math.round(layer.compression * 100);
+        const compVal = document.createElement("span");
+        compVal.style.minWidth = "36px";
+        compVal.style.fontSize = "12px";
+        compVal.style.color = "var(--text-dim)";
+        compVal.textContent = compRange.value + "%";
+        compRange.addEventListener("input", () => {
+          layer.compression = Number(compRange.value) / 100;
+          compVal.textContent = compRange.value + "%";
+          render();
+        });
+        compRow.append(compLabel, compRange, compVal);
+        card.appendChild(compRow);
         card.appendChild(
-          fieldRow("Rotation VP1 °", numberInput(layer.rotation, -360, 360, (v) => {
-            layer.rotation = Number(v) || 0;
-            render();
-          }))
-        );
-        card.appendChild(
-          fieldRow("Rotation VP2 °", numberInput(layer.rotation2, -360, 360, (v) => {
-            layer.rotation2 = Number(v) || 0;
+          fieldRow("Basislinie Y", numberInput(Math.round(layer.baseY != null ? layer.baseY : state.height), -4000, 8000, (v) => {
+            layer.baseY = Number(v) || 0;
             render();
           }))
         );
       } else {
         card.appendChild(
-          fieldRow(
-            layer.type === "concentric" ? "Ringabstand" : "Zellgröße",
-            numberInput(layer.cellSize, 4, 4000, (v) => {
-              layer.cellSize = Math.max(4, Math.round(v));
-              render();
-            })
-          )
+          fieldRow("Zellgröße", numberInput(layer.cellSize, 4, 4000, (v) => {
+            layer.cellSize = Math.max(4, Math.round(v));
+            render();
+          }))
         );
       }
 
@@ -617,21 +624,8 @@
       opRow.append(opLabel, opRange, opVal);
       card.appendChild(opRow);
 
-      if (layer.type === "radial2") {
-        card.appendChild(pointRow("Position VP1 X/Y", layer, "originX", "originY"));
-        card.appendChild(pointRow("Position VP2 X/Y", layer, "originX2", "originY2"));
-        card.appendChild(
-          fieldRow("Drag bewegt", selectInput(
-            [["1", "Fluchtpunkt 1"], ["2", "Fluchtpunkt 2"]],
-            layer.activeVP,
-            (v) => { layer.activeVP = v; }
-          ))
-        );
-      } else {
-        const posLabel = layer.type === "parallel-h" || layer.type === "parallel-v"
-          ? "Offset X/Y" : "Position X/Y";
-        card.appendChild(pointRow(posLabel, layer, "originX", "originY"));
-      }
+      const posLabel = layer.type === "depth" ? "Fluchtpunkt X/Y" : "Offset X/Y";
+      card.appendChild(pointRow(posLabel, layer, "originX", "originY"));
 
       const visRow = document.createElement("div");
       visRow.className = "row";
@@ -712,10 +706,6 @@
     canvas.height = state.height;
   }
 
-  // Generous reach for rays/rings so they always cover the canvas no
-  // matter where the origin sits; canvas clipping crops the rest for free.
-  function reach() { return Math.hypot(state.width, state.height) * 1.5; }
-
   function drawLayer(layer) {
     if (!layer.visible) return;
     ctx.save();
@@ -724,28 +714,27 @@
     ctx.lineWidth = layer.lineWidth;
     ctx.beginPath();
 
-    function rayBurst(ox, oy, rotDeg) {
-      const n = layer.lineCount;
-      const rot = (rotDeg || 0) * Math.PI / 180;
-      const R = reach();
+    if (layer.type === "depth") {
+      // Columns lead into the depth, converging on a single vanishing
+      // point. Rows stay strictly horizontal (parallel to the viewer)
+      // and compress geometrically toward the horizon -- together they
+      // read as square tiles receding into distance, not a starburst.
+      const baseY = layer.baseY != null ? layer.baseY : state.height;
+      const n = Math.max(2, layer.lineCount);
       for (let i = 0; i < n; i += 1) {
-        const angle = rot + i * (2 * Math.PI / n);
-        ctx.moveTo(ox, oy);
-        ctx.lineTo(ox + R * Math.cos(angle), oy + R * Math.sin(angle));
+        const x = n === 1 ? state.width / 2 : (i * state.width) / (n - 1);
+        ctx.moveTo(x, baseY);
+        ctx.lineTo(layer.originX, layer.originY);
       }
-    }
-
-    if (layer.type === "radial") {
-      rayBurst(layer.originX, layer.originY, layer.rotation);
-    } else if (layer.type === "radial2") {
-      rayBurst(layer.originX, layer.originY, layer.rotation);
-      rayBurst(layer.originX2, layer.originY2, layer.rotation2);
-    } else if (layer.type === "concentric") {
-      if (layer.cellSize <= 0) { ctx.restore(); return; }
-      const maxR = reach();
-      for (let r = layer.cellSize; r <= maxR; r += layer.cellSize) {
-        ctx.moveTo(layer.originX + r, layer.originY);
-        ctx.arc(layer.originX, layer.originY, r, 0, 2 * Math.PI);
+      const rows = Math.max(1, layer.rowCount);
+      const r = Math.min(0.97, Math.max(0.1, layer.compression));
+      ctx.moveTo(0, baseY + 0.5);
+      ctx.lineTo(state.width, baseY + 0.5);
+      for (let k = 1; k <= rows; k += 1) {
+        const t = 1 - Math.pow(r, k);
+        const y = baseY + (layer.originY - baseY) * t;
+        ctx.moveTo(0, y + 0.5);
+        ctx.lineTo(state.width, y + 0.5);
       }
     } else if (layer.type === "parallel-h") {
       if (layer.cellSize <= 0) { ctx.restore(); return; }
@@ -793,28 +782,18 @@
     };
   }
 
-  // radial2 has two draggable points; layer.activeVP picks which one a
-  // canvas drag moves. Every other type only ever has originX/originY.
-  function dragKeys(layer) {
-    if (layer.type === "radial2" && layer.activeVP === "2") return ["originX2", "originY2"];
-    return ["originX", "originY"];
-  }
-
   canvas.addEventListener("pointerdown", (evt) => {
     const layer = getLayer(state.activeLayerId);
     if (!layer) return;
     canvas.setPointerCapture(evt.pointerId);
     canvas.classList.add("dragging");
     const p = canvasCoords(evt);
-    const [xKey, yKey] = dragKeys(layer);
     dragState = {
       pointerId: evt.pointerId,
       startX: p.x,
       startY: p.y,
-      xKey: xKey,
-      yKey: yKey,
-      ox0: layer[xKey],
-      oy0: layer[yKey],
+      originX0: layer.originX,
+      originY0: layer.originY,
     };
     evt.preventDefault();
   });
@@ -826,12 +805,10 @@
     const p = canvasCoords(evt);
     const dx = p.x - dragState.startX;
     const dy = p.y - dragState.startY;
-    layer[dragState.xKey] = dragState.ox0 + dx;
-    layer[dragState.yKey] = dragState.oy0 + dy;
-    const xRef = layer["_" + dragState.xKey + "Input"];
-    const yRef = layer["_" + dragState.yKey + "Input"];
-    if (xRef) xRef.value = Math.round(layer[dragState.xKey]);
-    if (yRef) yRef.value = Math.round(layer[dragState.yKey]);
+    layer.originX = dragState.originX0 + dx;
+    layer.originY = dragState.originY0 + dy;
+    if (layer._originXInput) layer._originXInput.value = Math.round(layer.originX);
+    if (layer._originYInput) layer._originYInput.value = Math.round(layer.originY);
     render();
     evt.preventDefault();
   });
@@ -840,7 +817,7 @@
     if (!dragState || (evt.pointerId !== undefined && evt.pointerId !== dragState.pointerId)) return;
     const layer = getLayer(state.activeLayerId);
     // Only the repeating parallel types benefit from wrapping the origin
-    // back into [0, cellSize) -- a radial/radial2/concentric point is a
+    // back into [0, cellSize) -- a depth layer's vanishing point is a
     // real point in space, so it's left exactly where it was dropped.
     if (layer && (layer.type === "parallel-h" || layer.type === "parallel-v") && layer.cellSize > 0) {
       layer.originX = mod(layer.originX, layer.cellSize);
