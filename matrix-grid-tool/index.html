@@ -227,7 +227,7 @@
   <header>
     <div>
       <h1>Matrix Grid Tool</h1>
-      <div class="sub">Grid-Referenzbilder für KI-Bildgenerierung</div>
+      <div class="sub">Perspektivische Linien-Overlays für KI-Bildgenerierung</div>
     </div>
   </header>
 
@@ -275,7 +275,7 @@
       <div class="row" style="margin-top:10px;">
         <button id="addLayer">+ Ebene hinzufügen</button>
       </div>
-      <div class="hint">Aktive Ebene (blau markiert) lässt sich per Drag direkt in der Vorschau verschieben.</div>
+      <div class="hint">Aktive Ebene (blau markiert) lässt sich per Drag direkt in der Vorschau verschieben — bewegt den Fluchtpunkt/Mittelpunkt der Ebene. Überlagere mehrere Ebenen mit unterschiedlicher Position/Dichte/Rotation für Moiré- und Verdichtungseffekte.</div>
     </section>
 
     <section class="panel">
@@ -309,28 +309,55 @@
     { name: "Custom",                     w: null, h: null },
   ];
 
+  // Layer types (all deliberately NOT a flat orthogonal grid):
+  //  - 'radial':     straight rays spreading out from a vanishing/center
+  //                  point -- the classic one-point-perspective grid.
+  //  - 'concentric': concentric rings around a center point -- depth /
+  //                  distance cues, and strong moiré when overlapped
+  //                  with a 'radial' layer.
+  //  - 'parallel-h' / 'parallel-v': plain evenly-spaced straight lines
+  //                  (infinite vanishing point), kept as a building
+  //                  block for combining with the perspective types.
   let layerSeq = 0;
-  function makeLayer(orientation, cellSize) {
+  function makeLayer(type, overrides) {
     layerSeq += 1;
-    return {
+    return Object.assign({
       id: "l" + layerSeq,
-      orientation: orientation,      // 'horizontal' | 'vertical'
-      cellSize: cellSize,
+      type: type,
+      cellSize: 160,      // ring spacing (concentric) / line spacing (parallel)
+      lineCount: 28,       // ray count (radial)
+      rotation: 0,          // degrees (radial)
       lineWidth: 3,
       color: "#000000",
       opacity: 100,
-      offsetX: 0,
-      offsetY: 0,
+      originX: 0,
+      originY: 0,
       visible: true,
-    };
+    }, overrides || {});
   }
+
+  const TYPE_LABELS = {
+    radial: "Radial (Perspektive)",
+    concentric: "Konzentrisch",
+    "parallel-h": "Parallel – horizontal",
+    "parallel-v": "Parallel – vertikal",
+  };
 
   const state = {
     width: PRESETS[0].w,
     height: PRESETS[0].h,
     bgColor: "#ffffff",
     // list order = z-order; index 0 is drawn LAST (topmost).
-    layers: [makeLayer("vertical", 160), makeLayer("horizontal", 160)],
+    layers: [
+      makeLayer("concentric", {
+        originX: PRESETS[0].w * 0.5, originY: PRESETS[0].h * 0.65,
+        cellSize: 90, lineWidth: 2, color: "#808080", opacity: 55,
+      }),
+      makeLayer("radial", {
+        originX: PRESETS[0].w * 0.5, originY: PRESETS[0].h * 0.35,
+        lineCount: 32, rotation: 0, lineWidth: 3, color: "#000000", opacity: 75,
+      }),
+    ],
     activeLayerId: null,
   };
   state.activeLayerId = state.layers[0].id;
@@ -431,7 +458,10 @@
   function getLayer(id) { return state.layers.find((l) => l.id === id); }
 
   function addLayer() {
-    const layer = makeLayer("horizontal", 160);
+    const layer = makeLayer("radial", {
+      originX: state.width / 2,
+      originY: state.height / 2,
+    });
     state.layers.unshift(layer); // new layer goes on top
     state.activeLayerId = layer.id;
     renderLayerList();
@@ -472,9 +502,7 @@
       const title = document.createElement("div");
       title.className = "layer-title";
       title.innerHTML =
-        '<span class="dot"></span><strong>' +
-        (layer.orientation === "horizontal" ? "Horizontal" : "Vertikal") +
-        "</strong>";
+        '<span class="dot"></span><strong>' + TYPE_LABELS[layer.type] + "</strong>";
       title.addEventListener("click", () => {
         state.activeLayerId = layer.id;
         renderLayerList();
@@ -491,19 +519,38 @@
       card.appendChild(head);
 
       card.appendChild(
-        fieldRow("Ausrichtung", selectInput(
-          [["horizontal", "Horizontal"], ["vertical", "Vertikal"]],
-          layer.orientation,
-          (v) => { layer.orientation = v; renderLayerList(); render(); }
+        fieldRow("Typ", selectInput(
+          [["radial", TYPE_LABELS.radial], ["concentric", TYPE_LABELS.concentric],
+           ["parallel-h", TYPE_LABELS["parallel-h"]], ["parallel-v", TYPE_LABELS["parallel-v"]]],
+          layer.type,
+          (v) => { layer.type = v; renderLayerList(); render(); }
         ))
       );
 
-      card.appendChild(
-        fieldRow("Zellgröße", numberInput(layer.cellSize, 4, 4000, (v) => {
-          layer.cellSize = Math.max(4, Math.round(v));
-          render();
-        }))
-      );
+      if (layer.type === "radial") {
+        card.appendChild(
+          fieldRow("Anzahl Linien", numberInput(layer.lineCount, 2, 360, (v) => {
+            layer.lineCount = Math.max(2, Math.round(v));
+            render();
+          }))
+        );
+        card.appendChild(
+          fieldRow("Rotation °", numberInput(layer.rotation, -360, 360, (v) => {
+            layer.rotation = Number(v) || 0;
+            render();
+          }))
+        );
+      } else {
+        card.appendChild(
+          fieldRow(
+            layer.type === "concentric" ? "Ringabstand" : "Zellgröße",
+            numberInput(layer.cellSize, 4, 4000, (v) => {
+              layer.cellSize = Math.max(4, Math.round(v));
+              render();
+            })
+          )
+        );
+      }
 
       card.appendChild(
         fieldRow("Linienbreite", numberInput(layer.lineWidth, 1, 200, (v) => {
@@ -557,19 +604,20 @@
       const offRow = document.createElement("div");
       offRow.className = "row";
       const offLabel = document.createElement("label");
-      offLabel.textContent = "Offset X/Y";
+      offLabel.textContent = layer.type === "parallel-h" || layer.type === "parallel-v"
+        ? "Offset X/Y" : "Position X/Y";
       const offX = document.createElement("input");
       offX.type = "number";
-      offX.value = Math.round(layer.offsetX);
-      offX.addEventListener("change", () => { layer.offsetX = Number(offX.value) || 0; render(); });
+      offX.value = Math.round(layer.originX);
+      offX.addEventListener("change", () => { layer.originX = Number(offX.value) || 0; render(); });
       const offY = document.createElement("input");
       offY.type = "number";
-      offY.value = Math.round(layer.offsetY);
-      offY.addEventListener("change", () => { layer.offsetY = Number(offY.value) || 0; render(); });
+      offY.value = Math.round(layer.originY);
+      offY.addEventListener("change", () => { layer.originY = Number(offY.value) || 0; render(); });
       offRow.append(offLabel, offX, offY);
       card.appendChild(offRow);
-      layer._offXInput = offX;
-      layer._offYInput = offY;
+      layer._originXInput = offX;
+      layer._originYInput = offY;
 
       const visRow = document.createElement("div");
       visRow.className = "row";
@@ -630,26 +678,50 @@
     canvas.height = state.height;
   }
 
+  // Generous reach for rays/rings so they always cover the canvas no
+  // matter where the origin sits; canvas clipping crops the rest for free.
+  function reach() { return Math.hypot(state.width, state.height) * 1.5; }
+
   function drawLayer(layer) {
-    if (!layer.visible || layer.cellSize <= 0) return;
+    if (!layer.visible) return;
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity / 100));
     ctx.strokeStyle = layer.color;
     ctx.lineWidth = layer.lineWidth;
     ctx.beginPath();
-    if (layer.orientation === "horizontal") {
-      const start = mod(layer.offsetY, layer.cellSize) - layer.cellSize;
+
+    if (layer.type === "radial") {
+      const n = layer.lineCount;
+      const rot = (layer.rotation || 0) * Math.PI / 180;
+      const R = reach();
+      for (let i = 0; i < n; i += 1) {
+        const angle = rot + i * (2 * Math.PI / n);
+        ctx.moveTo(layer.originX, layer.originY);
+        ctx.lineTo(layer.originX + R * Math.cos(angle), layer.originY + R * Math.sin(angle));
+      }
+    } else if (layer.type === "concentric") {
+      if (layer.cellSize <= 0) { ctx.restore(); return; }
+      const maxR = reach();
+      for (let r = layer.cellSize; r <= maxR; r += layer.cellSize) {
+        ctx.moveTo(layer.originX + r, layer.originY);
+        ctx.arc(layer.originX, layer.originY, r, 0, 2 * Math.PI);
+      }
+    } else if (layer.type === "parallel-h") {
+      if (layer.cellSize <= 0) { ctx.restore(); return; }
+      const start = mod(layer.originY, layer.cellSize) - layer.cellSize;
       for (let y = start; y <= state.height + layer.cellSize; y += layer.cellSize) {
         ctx.moveTo(0, y + 0.5);
         ctx.lineTo(state.width, y + 0.5);
       }
-    } else {
-      const start = mod(layer.offsetX, layer.cellSize) - layer.cellSize;
+    } else if (layer.type === "parallel-v") {
+      if (layer.cellSize <= 0) { ctx.restore(); return; }
+      const start = mod(layer.originX, layer.cellSize) - layer.cellSize;
       for (let x = start; x <= state.width + layer.cellSize; x += layer.cellSize) {
         ctx.moveTo(x + 0.5, 0);
         ctx.lineTo(x + 0.5, state.height);
       }
     }
+
     ctx.stroke();
     ctx.restore();
   }
@@ -690,8 +762,8 @@
       pointerId: evt.pointerId,
       startX: p.x,
       startY: p.y,
-      offsetX0: layer.offsetX,
-      offsetY0: layer.offsetY,
+      originX0: layer.originX,
+      originY0: layer.originY,
     };
     evt.preventDefault();
   });
@@ -703,10 +775,10 @@
     const p = canvasCoords(evt);
     const dx = p.x - dragState.startX;
     const dy = p.y - dragState.startY;
-    layer.offsetX = dragState.offsetX0 + dx;
-    layer.offsetY = dragState.offsetY0 + dy;
-    if (layer._offXInput) layer._offXInput.value = Math.round(layer.offsetX);
-    if (layer._offYInput) layer._offYInput.value = Math.round(layer.offsetY);
+    layer.originX = dragState.originX0 + dx;
+    layer.originY = dragState.originY0 + dy;
+    if (layer._originXInput) layer._originXInput.value = Math.round(layer.originX);
+    if (layer._originYInput) layer._originYInput.value = Math.round(layer.originY);
     render();
     evt.preventDefault();
   });
@@ -714,12 +786,14 @@
   function endDrag(evt) {
     if (!dragState || (evt.pointerId !== undefined && evt.pointerId !== dragState.pointerId)) return;
     const layer = getLayer(state.activeLayerId);
-    if (layer && layer.cellSize > 0) {
-      // normalize into [0, cellSize) so the number fields stay readable
-      layer.offsetX = mod(layer.offsetX, layer.cellSize);
-      layer.offsetY = mod(layer.offsetY, layer.cellSize);
-      if (layer._offXInput) layer._offXInput.value = Math.round(layer.offsetX);
-      if (layer._offYInput) layer._offYInput.value = Math.round(layer.offsetY);
+    // Only the repeating parallel types benefit from wrapping the origin
+    // back into [0, cellSize) -- a radial/concentric origin is a real
+    // point in space, so it's left exactly where it was dropped.
+    if (layer && (layer.type === "parallel-h" || layer.type === "parallel-v") && layer.cellSize > 0) {
+      layer.originX = mod(layer.originX, layer.cellSize);
+      layer.originY = mod(layer.originY, layer.cellSize);
+      if (layer._originXInput) layer._originXInput.value = Math.round(layer.originX);
+      if (layer._originYInput) layer._originYInput.value = Math.round(layer.originY);
     }
     dragState = null;
     canvas.classList.remove("dragging");
