@@ -270,12 +270,31 @@
     </section>
 
     <section class="panel">
+      <h2>Kamera (Perspektive)</h2>
+      <div class="row">
+        <label>Standpunkthöhe</label>
+        <input type="number" id="camEye" min="0" max="1000" step="0.1" value="1.6">
+        <span style="color:var(--text-dim);font-size:12px;">m</span>
+      </div>
+      <div class="row">
+        <label>Brennweite</label>
+        <input type="number" id="camFocal" min="4" max="2000" step="1" value="50">
+        <span style="color:var(--text-dim);font-size:12px;">mm (Vollformat 36 mm)</span>
+      </div>
+      <div class="row">
+        <label>Horizont anzeigen</label>
+        <input type="checkbox" id="camHorizon">
+      </div>
+      <div class="hint">Wirkt auf die Perspektiv-Ebenen (Horizontale Ebene / Vertikale Wand). Blick ist waagerecht, der Horizont liegt auf Augenhöhe in der Bildmitte.</div>
+    </section>
+
+    <section class="panel">
       <h2>Ebenen</h2>
       <div id="layerList"></div>
       <div class="row" style="margin-top:10px;">
         <button id="addLayer">+ Ebene hinzufügen</button>
       </div>
-      <div class="hint">Aktive Ebene (blau markiert) lässt sich per Drag direkt in der Vorschau verschieben. Standard: eine horizontale + eine vertikale Ebene mit gleicher Zellgröße ergeben ein quadratisches Grid. Optional: Typ auf "Tiefenraster" stellen — Reihen bleiben parallel zum Betrachter, nur die Tiefenlinien führen in die Tiefe zu einem einzigen Fluchtpunkt.</div>
+      <div class="hint">Klick auf eine Ebene macht sie aktiv (blau). Flache Ebenen (Parallel) lassen sich per Drag in der Vorschau verschieben; Perspektiv-Ebenen werden über ihre Meter-Felder gesteuert. Standard: eine horizontale + eine vertikale Parallel-Ebene mit gleicher Zellgröße ergeben ein quadratisches Grundraster.</div>
     </section>
 
     <section class="panel">
@@ -310,24 +329,35 @@
   ];
 
   // Layer types:
-  //  - 'parallel-h' / 'parallel-v': the default flat square grid (same
-  //    cell size on both = square fields).
-  //  - 'depth': a proper one-point depth/floor grid -- the converging
-  //    ("Tiefenlinien") lines lead into the depth toward a single
-  //    vanishing point, while the ("Reihen") rows stay strictly
-  //    horizontal, parallel to the viewer, just compressing towards the
-  //    horizon. Not a starburst radiating in every direction.
+  //  - 'parallel-h' / 'parallel-v': flat image-space square grid (same
+  //    cell size on both = square fields). This is the default base grid.
+  //  - 'hplane': a real horizontal plane in world space at a given
+  //    elevation (0 = floor), cell size in metres, projected through the
+  //    shared camera -- a proper receding floor/level grid.
+  //  - 'wall': a real fronto-parallel vertical plane at a given depth
+  //    (distance), with height/width/cell size in metres.
+  // Every grid type also supports an "accent" (Betonung): every Nth grid
+  // line or every Nth cell gets a distinct colour, so overlapping planes
+  // build up interference/moire patterns.
   let layerSeq = 0;
   function makeLayer(type, overrides) {
     layerSeq += 1;
     return Object.assign({
       id: "l" + layerSeq,
       type: type,
-      cellSize: 160,      // line spacing (parallel types)
-      lineCount: 12,       // converging column count (depth)
-      rowCount: 10,          // horizontal row count (depth)
-      compression: 0.75,      // 0..1, how fast rows compress toward the horizon (depth)
-      baseY: null,             // near/baseline row Y (depth); filled in on first use
+      cellSize: 160,       // line spacing in px (parallel types)
+      // world-space (metres), used by hplane/wall
+      elevation: 0,          // hplane: height above ground (m)
+      distance: 4,            // wall: depth from camera (m)
+      heightM: 3,              // wall: height (m)
+      widthM: 6,                // wall: width (m)
+      extentM: 40,               // hplane: max depth/half-width (m)
+      cellM: 1,                   // hplane/wall: cell size (m)
+      // accent / Betonung
+      accentEvery: 0,      // 0 = off, else every Nth line/cell
+      accentMode: "lines", // 'lines' | 'cells'
+      accentColor: "#d02020",
+      accentOpacity: 100,
       lineWidth: 3,
       color: "#000000",
       opacity: 100,
@@ -338,15 +368,17 @@
   }
 
   const TYPE_LABELS = {
-    depth: "Tiefenraster (Perspektive)",
     "parallel-h": "Parallel – horizontal",
     "parallel-v": "Parallel – vertikal",
+    hplane: "Horizontale Ebene (Perspektive)",
+    wall: "Vertikale Wand (Perspektive)",
   };
 
   const state = {
     width: PRESETS[0].w,
     height: PRESETS[0].h,
     bgColor: "#ffffff",
+    camera: { eye: 1.6, focal: 50, showHorizon: false },
     // list order = z-order; index 0 is drawn LAST (topmost).
     layers: [
       makeLayer("parallel-v", { cellSize: 160 }),
@@ -371,6 +403,27 @@
   const qualityInput = document.getElementById("quality");
   const qualityVal = document.getElementById("qualityVal");
   const exportBtn = document.getElementById("exportBtn");
+  const camEyeInput = document.getElementById("camEye");
+  const camFocalInput = document.getElementById("camFocal");
+  const camHorizonInput = document.getElementById("camHorizon");
+
+  // ---------- Camera ----------
+  camEyeInput.addEventListener("change", () => {
+    const v = Number(camEyeInput.value);
+    state.camera.eye = isFinite(v) ? v : 0;
+    render();
+  });
+  camFocalInput.addEventListener("change", () => {
+    let v = Number(camFocalInput.value);
+    if (!isFinite(v) || v < 1) v = 1;
+    state.camera.focal = v;
+    camFocalInput.value = v;
+    render();
+  });
+  camHorizonInput.addEventListener("change", () => {
+    state.camera.showHorizon = camHorizonInput.checked;
+    render();
+  });
 
   // ---------- Presets ----------
   PRESETS.forEach((p, i) => {
@@ -512,60 +565,35 @@
       card.appendChild(
         fieldRow("Typ", selectInput(
           [["parallel-h", TYPE_LABELS["parallel-h"]], ["parallel-v", TYPE_LABELS["parallel-v"]],
-           ["depth", TYPE_LABELS.depth]],
+           ["hplane", TYPE_LABELS.hplane], ["wall", TYPE_LABELS.wall]],
           layer.type,
-          (v) => {
-            layer.type = v;
-            if (v === "depth" && layer.baseY == null) {
-              // sensible first guess: vanishing point above center, baseline at the bottom edge
-              layer.originX = state.width / 2;
-              layer.originY = state.height * 0.35;
-              layer.baseY = state.height;
-            }
-            renderLayerList();
-            render();
-          }
+          (v) => { layer.type = v; renderLayerList(); render(); }
         ))
       );
 
-      if (layer.type === "depth") {
-        card.appendChild(
-          fieldRow("Tiefenlinien", numberInput(layer.lineCount, 2, 200, (v) => {
-            layer.lineCount = Math.max(2, Math.round(v));
-            render();
-          }))
-        );
-        card.appendChild(
-          fieldRow("Reihen", numberInput(layer.rowCount, 1, 100, (v) => {
-            layer.rowCount = Math.max(1, Math.round(v));
-            render();
-          }))
-        );
-        const compRow = document.createElement("div");
-        compRow.className = "row";
-        const compLabel = document.createElement("label");
-        compLabel.textContent = "Kompression";
-        const compRange = document.createElement("input");
-        compRange.type = "range";
-        compRange.min = 30; compRange.max = 95; compRange.value = Math.round(layer.compression * 100);
-        const compVal = document.createElement("span");
-        compVal.style.minWidth = "36px";
-        compVal.style.fontSize = "12px";
-        compVal.style.color = "var(--text-dim)";
-        compVal.textContent = compRange.value + "%";
-        compRange.addEventListener("input", () => {
-          layer.compression = Number(compRange.value) / 100;
-          compVal.textContent = compRange.value + "%";
-          render();
-        });
-        compRow.append(compLabel, compRange, compVal);
-        card.appendChild(compRow);
-        card.appendChild(
-          fieldRow("Basislinie Y", numberInput(Math.round(layer.baseY != null ? layer.baseY : state.height), -4000, 8000, (v) => {
-            layer.baseY = Number(v) || 0;
-            render();
-          }))
-        );
+      if (layer.type === "hplane") {
+        card.appendChild(fieldRow("Höhe (m)", numberInputF(layer.elevation, -1000, 1000, (v) => {
+          layer.elevation = v; render();
+        })));
+        card.appendChild(fieldRow("Zellgröße (m)", numberInputF(layer.cellM, 0.01, 1000, (v) => {
+          layer.cellM = Math.max(0.01, v); render();
+        })));
+        card.appendChild(fieldRow("Ausdehnung (m)", numberInputF(layer.extentM, 1, 100000, (v) => {
+          layer.extentM = Math.max(1, v); render();
+        })));
+      } else if (layer.type === "wall") {
+        card.appendChild(fieldRow("Entfernung (m)", numberInputF(layer.distance, 0.1, 100000, (v) => {
+          layer.distance = Math.max(0.1, v); render();
+        })));
+        card.appendChild(fieldRow("Höhe (m)", numberInputF(layer.heightM, 0.1, 10000, (v) => {
+          layer.heightM = Math.max(0.1, v); render();
+        })));
+        card.appendChild(fieldRow("Breite (m)", numberInputF(layer.widthM, 0.1, 10000, (v) => {
+          layer.widthM = Math.max(0.1, v); render();
+        })));
+        card.appendChild(fieldRow("Zellgröße (m)", numberInputF(layer.cellM, 0.01, 1000, (v) => {
+          layer.cellM = Math.max(0.01, v); render();
+        })));
       } else {
         card.appendChild(
           fieldRow("Zellgröße", numberInput(layer.cellSize, 4, 4000, (v) => {
@@ -624,8 +652,69 @@
       opRow.append(opLabel, opRange, opVal);
       card.appendChild(opRow);
 
-      const posLabel = layer.type === "depth" ? "Fluchtpunkt X/Y" : "Offset X/Y";
-      card.appendChild(pointRow(posLabel, layer, "originX", "originY"));
+      // ---- Accent / Betonung (every Nth line or cell) ----
+      card.appendChild(fieldRow("Betonung", numberInput(layer.accentEvery, 0, 100, (v) => {
+        layer.accentEvery = Math.max(0, Math.round(v));
+        renderLayerList();
+        render();
+      })));
+      if (layer.accentEvery >= 2) {
+        card.appendChild(
+          fieldRow("— jede N-te", selectInput(
+            [["lines", "Linie"], ["cells", "Fläche (Feld)"]],
+            layer.accentMode,
+            (v) => { layer.accentMode = v; render(); }
+          ))
+        );
+        const accRow = document.createElement("div");
+        accRow.className = "row";
+        const accLabel = document.createElement("label");
+        accLabel.textContent = "— Farbe";
+        accRow.appendChild(accLabel);
+        const accSw = document.createElement("div");
+        accSw.className = "swatches";
+        ["#d02020", "#000000", "#ffffff", "#808080"].forEach((c) => {
+          const b = document.createElement("button");
+          b.className = "swatch";
+          b.dataset.c = c;
+          b.style.background = c;
+          b.addEventListener("click", () => { layer.accentColor = c; accPicker.value = c; render(); });
+          accSw.appendChild(b);
+        });
+        accRow.appendChild(accSw);
+        const accPicker = document.createElement("input");
+        accPicker.type = "color";
+        accPicker.value = layer.accentColor;
+        accPicker.addEventListener("input", () => { layer.accentColor = accPicker.value; render(); });
+        accRow.appendChild(accPicker);
+        card.appendChild(accRow);
+
+        const accOpRow = document.createElement("div");
+        accOpRow.className = "row";
+        const accOpLabel = document.createElement("label");
+        accOpLabel.textContent = "— Deckkraft";
+        const accOpRange = document.createElement("input");
+        accOpRange.type = "range";
+        accOpRange.min = 0; accOpRange.max = 100; accOpRange.value = layer.accentOpacity;
+        const accOpVal = document.createElement("span");
+        accOpVal.style.minWidth = "36px";
+        accOpVal.style.fontSize = "12px";
+        accOpVal.style.color = "var(--text-dim)";
+        accOpVal.textContent = layer.accentOpacity + "%";
+        accOpRange.addEventListener("input", () => {
+          layer.accentOpacity = Number(accOpRange.value);
+          accOpVal.textContent = layer.accentOpacity + "%";
+          render();
+        });
+        accOpRow.append(accOpLabel, accOpRange, accOpVal);
+        card.appendChild(accOpRow);
+      }
+
+      // Flat parallel layers are drag-positioned; perspective layers are
+      // measurement-driven and expose no image-space offset.
+      if (layer.type === "parallel-h" || layer.type === "parallel-v") {
+        card.appendChild(pointRow("Offset X/Y", layer, "originX", "originY"));
+      }
 
       const visRow = document.createElement("div");
       visRow.className = "row";
@@ -677,6 +766,21 @@
     inp.addEventListener("change", () => onChange(Number(inp.value)));
     return inp;
   }
+  // Float variant (metric fields): allows decimals, clamps to [min,max].
+  function numberInputF(value, min, max, onChange) {
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.min = min; inp.max = max; inp.step = "any";
+    inp.value = value;
+    inp.addEventListener("change", () => {
+      let v = Number(inp.value);
+      if (!isFinite(v)) v = min;
+      v = Math.min(max, Math.max(min, v));
+      inp.value = v;
+      onChange(v);
+    });
+    return inp;
+  }
   // A labeled X/Y number-input pair bound to layer[xKey]/layer[yKey];
   // stashes the inputs on the layer so canvas drags can keep them in sync.
   function pointRow(labelText, layer, xKey, yKey) {
@@ -706,54 +810,159 @@
     canvas.height = state.height;
   }
 
-  function drawLayer(layer) {
-    if (!layer.visible) return;
+  function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+
+  // Pinhole camera: world (Xw right, Yw up with 0 = ground, Zw depth
+  // forward), camera at (0, eye, 0) looking horizontally along +Z.
+  // fpx = focal in px = (focalMm / 36mm full-frame) * imageWidth.
+  function project(Xw, Yw, Zw) {
+    const cam = state.camera;
+    const fpx = (cam.focal / 36) * state.width;
+    const cx = state.width / 2, cy = state.height / 2;
+    return { x: cx + fpx * Xw / Zw, y: cy - fpx * (Yw - cam.eye) / Zw };
+  }
+  function proj2(Xw, Yw, Zw) { const p = project(Xw, Yw, Zw); return [p.x, p.y]; }
+
+  function strokeSegs(segs, color, width, alpha) {
+    if (!segs.length) return;
     ctx.save();
-    ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity / 100));
-    ctx.strokeStyle = layer.color;
-    ctx.lineWidth = layer.lineWidth;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
     ctx.beginPath();
-
-    if (layer.type === "depth") {
-      // Columns lead into the depth, converging on a single vanishing
-      // point. Rows stay strictly horizontal (parallel to the viewer)
-      // and compress geometrically toward the horizon -- together they
-      // read as square tiles receding into distance, not a starburst.
-      const baseY = layer.baseY != null ? layer.baseY : state.height;
-      const n = Math.max(2, layer.lineCount);
-      for (let i = 0; i < n; i += 1) {
-        const x = n === 1 ? state.width / 2 : (i * state.width) / (n - 1);
-        ctx.moveTo(x, baseY);
-        ctx.lineTo(layer.originX, layer.originY);
-      }
-      const rows = Math.max(1, layer.rowCount);
-      const r = Math.min(0.97, Math.max(0.1, layer.compression));
-      ctx.moveTo(0, baseY + 0.5);
-      ctx.lineTo(state.width, baseY + 0.5);
-      for (let k = 1; k <= rows; k += 1) {
-        const t = 1 - Math.pow(r, k);
-        const y = baseY + (layer.originY - baseY) * t;
-        ctx.moveTo(0, y + 0.5);
-        ctx.lineTo(state.width, y + 0.5);
-      }
-    } else if (layer.type === "parallel-h") {
-      if (layer.cellSize <= 0) { ctx.restore(); return; }
-      const start = mod(layer.originY, layer.cellSize) - layer.cellSize;
-      for (let y = start; y <= state.height + layer.cellSize; y += layer.cellSize) {
-        ctx.moveTo(0, y + 0.5);
-        ctx.lineTo(state.width, y + 0.5);
-      }
-    } else if (layer.type === "parallel-v") {
-      if (layer.cellSize <= 0) { ctx.restore(); return; }
-      const start = mod(layer.originX, layer.cellSize) - layer.cellSize;
-      for (let x = start; x <= state.width + layer.cellSize; x += layer.cellSize) {
-        ctx.moveTo(x + 0.5, 0);
-        ctx.lineTo(x + 0.5, state.height);
-      }
-    }
-
+    for (const s of segs) { ctx.moveTo(s[0], s[1]); ctx.lineTo(s[2], s[3]); }
     ctx.stroke();
     ctx.restore();
+  }
+  function fillQuads(quads, color, alpha) {
+    if (!quads.length) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    for (const q of quads) {
+      ctx.moveTo(q[0][0], q[0][1]);
+      for (let i = 1; i < q.length; i += 1) ctx.lineTo(q[i][0], q[i][1]);
+      ctx.closePath();
+    }
+    ctx.fill();
+    ctx.restore();
+  }
+
+  const MAX_LINES = 400; // guard against tiny cell / huge extent blowups
+  const ZNEAR = 0.25;    // metres; nearest depth we project (avoids /~0)
+
+  function drawLayer(layer) {
+    if (!layer.visible) return;
+    const alpha = clamp01(layer.opacity / 100);
+    if (layer.type === "parallel-h" || layer.type === "parallel-v") {
+      drawFlat(layer, alpha);
+    } else if (layer.type === "hplane") {
+      drawHPlane(layer, alpha);
+    } else if (layer.type === "wall") {
+      drawWall(layer, alpha);
+    }
+  }
+
+  function drawFlat(layer, alpha) {
+    const cell = layer.cellSize;
+    if (cell <= 0) return;
+    const N = layer.accentEvery >= 2 ? layer.accentEvery : 0; // flat: line accent only
+    const base = [], acc = [];
+    if (layer.type === "parallel-h") {
+      const start = mod(layer.originY, cell) - cell;
+      let i = 0;
+      for (let y = start; y <= state.height + cell; y += cell, i += 1) {
+        (N && mod(i, N) === 0 ? acc : base).push([0, y + 0.5, state.width, y + 0.5]);
+      }
+    } else {
+      const start = mod(layer.originX, cell) - cell;
+      let i = 0;
+      for (let x = start; x <= state.width + cell; x += cell, i += 1) {
+        (N && mod(i, N) === 0 ? acc : base).push([x + 0.5, 0, x + 0.5, state.height]);
+      }
+    }
+    strokeSegs(base, layer.color, layer.lineWidth, alpha);
+    if (N) strokeSegs(acc, layer.accentColor, layer.lineWidth, clamp01(layer.accentOpacity / 100));
+  }
+
+  function drawHPlane(layer, alpha) {
+    const cell = layer.cellM;
+    if (cell <= 0) return;
+    const e = layer.elevation, ext = layer.extentM;
+    const J = Math.min(MAX_LINES, Math.floor(ext / cell)); // half-width in cells
+    const K = Math.min(MAX_LINES, Math.floor(ext / cell)); // depth in cells
+    const N = layer.accentEvery >= 2 ? layer.accentEvery : 0;
+    const linesMode = N && layer.accentMode === "lines";
+    const cellsMode = N && layer.accentMode === "cells";
+    const base = [], acc = [], quads = [];
+    const halfW = J * cell;
+    // depth lines (run into Z at fixed X)
+    for (let j = -J; j <= J; j += 1) {
+      const X = j * cell;
+      const p0 = project(X, e, ZNEAR), p1 = project(X, e, ext);
+      (linesMode && mod(j, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
+    }
+    // cross lines (run across X at fixed Z)
+    for (let k = 1; k <= K; k += 1) {
+      const Z = k * cell;
+      if (Z < ZNEAR) continue;
+      const p0 = project(-halfW, e, Z), p1 = project(halfW, e, Z);
+      (linesMode && mod(k, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
+    }
+    if (cellsMode) {
+      for (let j = -J; j < J; j += 1) {
+        if (mod(j, N) !== 0) continue;
+        for (let k = 1; k < K; k += 1) {
+          if (mod(k, N) !== 0) continue;
+          const Z0 = k * cell, Z1 = (k + 1) * cell;
+          if (Z0 < ZNEAR) continue;
+          const X0 = j * cell, X1 = (j + 1) * cell;
+          quads.push([proj2(X0, e, Z0), proj2(X1, e, Z0), proj2(X1, e, Z1), proj2(X0, e, Z1)]);
+        }
+      }
+    }
+    if (cellsMode) fillQuads(quads, layer.accentColor, clamp01(layer.accentOpacity / 100));
+    strokeSegs(base, layer.color, layer.lineWidth, alpha);
+    if (linesMode) strokeSegs(acc, layer.accentColor, layer.lineWidth, clamp01(layer.accentOpacity / 100));
+  }
+
+  function drawWall(layer, alpha) {
+    const cell = layer.cellM;
+    if (cell <= 0) return;
+    const d = layer.distance, H = layer.heightM, W = layer.widthM;
+    const Jw = Math.min(MAX_LINES, Math.floor((W / 2) / cell));
+    const Kw = Math.min(MAX_LINES, Math.floor(H / cell));
+    const N = layer.accentEvery >= 2 ? layer.accentEvery : 0;
+    const linesMode = N && layer.accentMode === "lines";
+    const cellsMode = N && layer.accentMode === "cells";
+    const base = [], acc = [], quads = [];
+    const halfW = Jw * cell;
+    // vertical lines (fixed X, Y from 0..H)
+    for (let j = -Jw; j <= Jw; j += 1) {
+      const X = j * cell;
+      const p0 = project(X, 0, d), p1 = project(X, H, d);
+      (linesMode && mod(j, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
+    }
+    // horizontal lines (fixed Y, X from -halfW..halfW)
+    for (let k = 0; k <= Kw; k += 1) {
+      const Y = k * cell;
+      const p0 = project(-halfW, Y, d), p1 = project(halfW, Y, d);
+      (linesMode && mod(k, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
+    }
+    if (cellsMode) {
+      for (let j = -Jw; j < Jw; j += 1) {
+        if (mod(j, N) !== 0) continue;
+        for (let k = 0; k < Kw; k += 1) {
+          if (mod(k, N) !== 0) continue;
+          const X0 = j * cell, X1 = (j + 1) * cell, Y0 = k * cell, Y1 = (k + 1) * cell;
+          quads.push([proj2(X0, Y0, d), proj2(X1, Y0, d), proj2(X1, Y1, d), proj2(X0, Y1, d)]);
+        }
+      }
+    }
+    if (cellsMode) fillQuads(quads, layer.accentColor, clamp01(layer.accentOpacity / 100));
+    strokeSegs(base, layer.color, layer.lineWidth, alpha);
+    if (linesMode) strokeSegs(acc, layer.accentColor, layer.lineWidth, clamp01(layer.accentOpacity / 100));
   }
 
   function render() {
@@ -766,6 +975,17 @@
     // first item drawn last (top).
     for (let i = state.layers.length - 1; i >= 0; i -= 1) {
       drawLayer(state.layers[i]);
+    }
+    if (state.camera.showHorizon) {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = "#3aa0ff";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, state.height / 2 + 0.5);
+      ctx.lineTo(state.width, state.height / 2 + 0.5);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
