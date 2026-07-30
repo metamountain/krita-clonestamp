@@ -537,9 +537,10 @@
       accentMode: "lines", // 'lines' | 'cells'
       accentColor: "#d02020",
       accentOpacity: 100,
-      // random phase so each layer's coloured fields are offset (not aligned)
-      accentPhaseA: Math.floor(Math.random() * 6),
-      accentPhaseB: Math.floor(Math.random() * 6),
+      // random field offset per layer, in whole cells, on both axes and in
+      // both directions (incl. negative -> e.g. x -1, and along -z/depth).
+      accentPhaseA: Math.floor(Math.random() * 7) - 3, // x axis: -3..+3
+      accentPhaseB: Math.floor(Math.random() * 7) - 3, // z/depth axis: -3..+3
       flowSpeed: 0,        // motion: metres/s (perspective) or px/s (flat)
       vel: 0,              // hplane: vertical velocity (m/s) for the physics stack
       lineWidth: 3,
@@ -1083,8 +1084,8 @@
     for (const l of state.layers) {
       l.color = randomColor();
       l.accentColor = randomColor();
-      l.accentPhaseA = Math.floor(Math.random() * 6); // re-offset the fields too
-      l.accentPhaseB = Math.floor(Math.random() * 6);
+      l.accentPhaseA = Math.floor(Math.random() * 7) - 3; // re-offset (incl. -x)
+      l.accentPhaseB = Math.floor(Math.random() * 7) - 3; // z/depth, incl. -z
     }
     renderLayerList();     // refresh chips
     renderActiveEditor();  // refresh the active editor's colour pickers
