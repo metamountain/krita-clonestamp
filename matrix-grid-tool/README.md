@@ -33,8 +33,14 @@ works fine over `file://`, no server or install required).
 4. **Animation**: the grids move by default. **Play/Pause** stops or
    starts the motion and **Tempo** scales the global speed; each layer has
    its own **Bewegung** (speed/direction). Pause before exporting a still.
-5. **Ebenen**: the default layer is a *Horizontale Ebene (Perspektive)* —
-   the animated floor. Click **+ Ebene hinzufügen** to add more; new
+5. **Physik (Stapel)**: the horizontal planes behave like a physical
+   stack. **Gravitation** pulls them down, **Abstoßung** pushes them apart,
+   **Dichte** sets the rest gap between them (higher = tighter), and
+   **Dämpfung** controls how bouncy/settled it is. **💥 Anstoßen** kicks
+   the stack. It only runs while the animation plays; turn **Physik an**
+   off to set plane heights manually with the Höhe slider instead.
+6. **Ebenen**: the default scene is a *stack of horizontal planes*
+   (*Horizontale Ebene (Perspektive)*) that settles under the physics. Click **+ Ebene hinzufügen** to add more; new
    planes are placed higher and **auto-coloured sensibly** (the base grid
    is white; further/higher planes take a soft hue and fade to be more
    subtle). **🎲 Zufall** rolls a whole new random constellation (camera,
@@ -59,10 +65,10 @@ works fine over `file://`, no server or install required).
    line (*Linie*) or every N-th cell (*Fläche*) in a separate colour.
    Overlapping planes with different accents build up interesting
    interference/moiré patterns.
-6. **Drag to move**: flat *Parallel* layers can be dragged directly on the
+7. **Drag to move**: flat *Parallel* layers can be dragged directly on the
    canvas preview to reposition them; perspective layers are driven by
    their metric fields instead.
-7. **Export**: renders the composed image at the full target resolution
+8. **Export**: renders the composed image at the full target resolution
    and downloads it as a JPEG (pause the animation first for a clean
    still).
 
