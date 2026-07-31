@@ -384,7 +384,17 @@
         <input type="range" id="jamHue" min="0" max="360" step="1" value="0">
         <span id="jamHueVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">0°</span>
       </div>
-      <div class="hint">Drehen für Chaos: Geschwindigkeit &amp; Kraftfeld treiben die Physik, H-/V-Ebenen spawnen bzw. entfernen Ebenen live, Farbe dreht die ganze Palette. 💥 anstoßen · 🎲 neu würfeln.</div>
+      <div class="row">
+        <label>Zusatzfelder</label>
+        <select id="fieldsMode">
+          <option value="off">Aus</option>
+          <option value="2x2">2×2</option>
+          <option value="3x3">3×3</option>
+          <option value="checker">Checker</option>
+          <option value="random" selected>Zufall</option>
+        </select>
+      </div>
+      <div class="hint">Drehen für Chaos: Geschwindigkeit &amp; Kraftfeld treiben die Physik, H-/V-Ebenen spawnen bzw. entfernen Ebenen live, Farbe dreht die Palette, Zusatzfelder = farbige Feldmuster (2×2, 3×3, Checker) oder aus. 💥 anstoßen · 🎲 neu würfeln.</div>
     </section>
 
     <section class="panel">
@@ -498,7 +508,8 @@
   "use strict";
 
   const PRESETS = [
-    { name: "5:4 – Standard (1536×1920)", w: 1536, h: 1920 },
+    { name: "Ultrawide (2670×1200)",      w: 2670, h: 1200 },
+    { name: "5:4 (1536×1920)",            w: 1536, h: 1920 },
     { name: "4:3 (1440×1920)",            w: 1440, h: 1920 },
     { name: "16:9 (1920×1080)",           w: 1920, h: 1080 },
     { name: "1:1 (1920×1920)",            w: 1920, h: 1920 },
@@ -558,12 +569,30 @@
   // so higher / more distant planes read as more subtle. "mit Sinn":
   // colour by index, opacity down with height/index.
   const LAYER_HUES = ["#8fdcff", "#ff9ecb", "#a6f0a6", "#ffd27f", "#c9a9ff", "#9fe8d8"];
+  const BASE_COLOR = "#39c9ff"; // base grid colour (deliberately NOT white)
   function autoStyle(index) {
-    if (index <= 0) return { color: "#ffffff", opacity: 100 };
+    if (index <= 0) return { color: BASE_COLOR, opacity: 100 };
     return {
       color: LAYER_HUES[(index - 1) % LAYER_HUES.length],
       opacity: Math.max(28, 92 - index * 12),
     };
+  }
+
+  // Extra coloured fields ("Zusatzfelder") generator. Modes: off, 2x2, 3x3,
+  // checker, or random (per layer). Applied to a layer's accent settings.
+  function fieldsSpec(mode) {
+    if (mode === "random") mode = ["2x2", "3x3", "checker"][Math.floor(Math.random() * 3)];
+    switch (mode) {
+      case "2x2": return { accentEvery: 2, accentMode: "cells" };
+      case "3x3": return { accentEvery: 3, accentMode: "cells" };
+      case "checker": return { accentEvery: 2, accentMode: "checker" };
+      default: return { accentEvery: 0, accentMode: "cells" }; // off
+    }
+  }
+  function applyFields(layer) {
+    const f = fieldsSpec(state.fieldsMode);
+    layer.accentEvery = f.accentEvery;
+    layer.accentMode = f.accentMode;
   }
 
   const TYPE_LABELS = {
@@ -583,15 +612,14 @@
         cellM: 1,
         flowSpeed: 3,
         flowX: +( (Math.random() * 2 - 1) * 2.5 ).toFixed(1), // lateral drift
-        color: i === 0 ? "#ffffff" : s.color,
+        color: s.color,             // base grid is coloured, not white
         opacity: i === 0 ? 100 : s.opacity,
       });
-      // Colourful filled grid fields on EVERY plane (checkerboard-ish),
-      // so the colour is spread across the whole stack, not just the top.
-      l.accentEvery = 2;
-      l.accentMode = "cells";
-      l.accentColor = i === 0 ? "#8fdcff" : s.color;
+      l.accentColor = s.color;
       l.accentOpacity = 40;
+      // fieldsSpec directly (state isn't initialised yet during this call)
+      const f = fieldsSpec("random");
+      l.accentEvery = f.accentEvery; l.accentMode = f.accentMode;
       arr.push(l);
     }
     return arr;
@@ -610,6 +638,7 @@
     // "einfedern" (spring/settle) into the new spacing.
     physics: { enabled: true, gravity: 6, damping: 1.4, spread: 0.5 },
     jam: { hue: 0 }, // global hue rotation applied to all layer colours
+    fieldsMode: "random", // Zusatzfelder: off | 2x2 | 3x3 | checker | random
     clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).
     layers: makeStack(10),
@@ -714,6 +743,15 @@
   const jamVCountVal = document.getElementById("jamVCountVal");
   const jamHueInput = document.getElementById("jamHue");
   const jamHueVal = document.getElementById("jamHueVal");
+  const fieldsModeSelect = document.getElementById("fieldsMode");
+
+  // Zusatzfelder generator: apply the chosen pattern to every layer.
+  fieldsModeSelect.addEventListener("change", () => {
+    state.fieldsMode = fieldsModeSelect.value;
+    for (const l of state.layers) applyFields(l);
+    renderActiveEditor();
+    render();
+  });
 
   // ---------- Jam (808) controls ----------
   // H-/V-Ebenen dials spawn or remove layers of a type live; Farbe rotates
@@ -736,14 +774,11 @@
       ov.distance = +rnd(2, 12).toFixed(1); ov.heightM = +rnd(2, 5).toFixed(1);
       ov.widthM = +rnd(4, 10).toFixed(1);
     }
-    // Colourful filled fields everywhere (all planes, not just the top).
-    if (chance(0.7)) {
-      ov.accentEvery = pick([2, 3]);
-      ov.accentMode = "cells";
-      ov.accentColor = ov.color;
-      ov.accentOpacity = 45;
-    }
-    state.layers.unshift(makeLayer(type, ov));
+    ov.accentColor = ov.color;
+    ov.accentOpacity = 45;
+    const layer = makeLayer(type, ov);
+    applyFields(layer); // Zusatzfelder pattern from the global generator
+    state.layers.unshift(layer);
   }
   function setTypeCount(type, n) {
     n = Math.max(0, Math.round(n));
@@ -1048,7 +1083,7 @@
       let fs = 0;
       if (chance(0.85)) { fs = +rnd(1.5, 8).toFixed(1); if (chance(0.2)) fs = -fs; }
       const l = makeLayer(type, {
-        color: chance(0.12) ? "#ffffff" : style.color,
+        color: style.color,       // no white base -- always coloured
         opacity: chance(0.3) ? 100 : style.opacity,
         flowSpeed: fs,
         flowX: chance(0.7) ? +rnd(-4, 4).toFixed(1) : 0,
@@ -1061,13 +1096,9 @@
         widthM: +rnd(4, 10).toFixed(1),
         extentM: pick([30, 40, 60]),
       });
-      // Colourful filled fields everywhere (all planes, not just the top).
-      if (chance(0.7)) {
-        l.accentEvery = pick([2, 3]);
-        l.accentMode = "cells";
-        l.accentColor = chance(0.5) ? l.color : pick(LAYER_HUES.concat(["#ffffff", "#ff3355"]));
-        l.accentOpacity = rndInt(40, 70);
-      }
+      l.accentColor = chance(0.5) ? l.color : pick(LAYER_HUES.concat(["#ff3355"]));
+      l.accentOpacity = rndInt(40, 70);
+      applyFields(l); // Zusatzfelder pattern from the global generator
       layers.push(l);
     }
     state.layers = layers;
@@ -1097,8 +1128,10 @@
 
   // Reset to a single base plane (clear the stack).
   function clearLayers() {
-    state.layers = [makeLayer("hplane", { color: "#ffffff", opacity: 100, cellM: 1, flowSpeed: 3 })];
-    state.activeLayerId = state.layers[0].id;
+    const l = makeLayer("hplane", { color: BASE_COLOR, opacity: 100, cellM: 1, flowSpeed: 3 });
+    l.accentColor = BASE_COLOR; applyFields(l);
+    state.layers = [l];
+    state.activeLayerId = l.id;
     renderLayerList();
     renderActiveEditor();
     render();
@@ -1321,7 +1354,7 @@
     if (layer.accentEvery >= 2) {
       card.appendChild(
         fieldRow("— als", selectInput(
-          [["lines", "Linie"], ["cells", "Fläche (Feld)"]],
+          [["lines", "Linie"], ["cells", "Fläche (Feld)"], ["checker", "Checker"]],
           layer.accentMode,
           (v) => { layer.accentMode = v; render(); }
         ))
@@ -1509,8 +1542,16 @@
     ctx.restore();
   }
 
-  const MAX_LINES = 400; // guard against tiny cell / huge extent blowups
-  const ZNEAR = 0.25;    // metres; nearest depth we project (avoids /~0)
+  const MAX_LINES = 400;  // guard against tiny cell / huge extent blowups
+  const ZNEAR = 0.25;     // metres; nearest depth we project (avoids /~0)
+  const CELL_CAP = 90;    // cap on cell-fill loop range (perf for checker)
+
+  // Does grid cell (j,k) get an accent fill? 'cells' = every-Nth lattice,
+  // 'checker' = checkerboard. Phase offsets shift the pattern per layer.
+  function accentHit(layer, N, j, k, pA, pB) {
+    if (layer.accentMode === "checker") return mod((j + pA) + (k + pB), 2) === 0;
+    return mod(j + pA, N) === 0 && mod(k + pB, N) === 0;
+  }
 
   function drawLayer(layer) {
     if (!layer.visible) return;
@@ -1557,7 +1598,7 @@
     const N = layer.accentEvery >= 2 ? layer.accentEvery : 0;
     const pA = layer.accentPhaseA || 0, pB = layer.accentPhaseB || 0;
     const linesMode = N && layer.accentMode === "lines";
-    const cellsMode = N && layer.accentMode === "cells";
+    const cellsMode = N && (layer.accentMode === "cells" || layer.accentMode === "checker");
     const base = [], acc = [], quads = [];
     const halfW = J * cell;
     // Animation: scroll the grid in depth (phaseZ -> moving "game floor")
@@ -1578,10 +1619,10 @@
       (linesMode && mod(k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     if (cellsMode) {
-      for (let j = -J; j < J; j += 1) {
-        if (mod(j + pA, N) !== 0) continue;
-        for (let k = 1; k <= K + 1; k += 1) {
-          if (mod(k + pB, N) !== 0) continue;
+      const Jc = Math.min(J, CELL_CAP), Kc = Math.min(K, CELL_CAP);
+      for (let j = -Jc; j < Jc; j += 1) {
+        for (let k = 1; k <= Kc; k += 1) {
+          if (!accentHit(layer, N, j, k, pA, pB)) continue;
           const Z0 = k * cell - phaseZ, Z1 = Z0 + cell;
           if (Z0 < ZNEAR || Z0 > ext) continue;
           const X0 = j * cell - phaseX, X1 = X0 + cell;
@@ -1603,7 +1644,7 @@
     const N = layer.accentEvery >= 2 ? layer.accentEvery : 0;
     const pA = layer.accentPhaseA || 0, pB = layer.accentPhaseB || 0;
     const linesMode = N && layer.accentMode === "lines";
-    const cellsMode = N && layer.accentMode === "cells";
+    const cellsMode = N && (layer.accentMode === "cells" || layer.accentMode === "checker");
     const base = [], acc = [], quads = [];
     const halfW = Jw * cell;
     // Animation: scroll the wall grid vertically (phaseY) and laterally
@@ -1624,10 +1665,10 @@
       (linesMode && mod(k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     if (cellsMode) {
-      for (let j = -Jw; j < Jw; j += 1) {
-        if (mod(j + pA, N) !== 0) continue;
-        for (let k = 0; k <= Kw + 1; k += 1) {
-          if (mod(k + pB, N) !== 0) continue;
+      const Jc = Math.min(Jw, CELL_CAP), Kc = Math.min(Kw, CELL_CAP);
+      for (let j = -Jc; j < Jc; j += 1) {
+        for (let k = 0; k < Kc; k += 1) {
+          if (!accentHit(layer, N, j, k, pA, pB)) continue;
           const Y0 = k * cell - phaseY, Y1 = Y0 + cell;
           if (Y0 < 0 || Y0 > H) continue;
           const X0 = j * cell - phaseX, X1 = X0 + cell;

@@ -24,8 +24,9 @@ dials you scrub for instant, chaotic results:
   constant spring stiffness makes them bounce into the new spacing.
 - **H-Ebenen / V-Ebenen** — spawn or remove horizontal planes / vertical
   walls *live* as you turn the dial.
-- **Farbe** — rotates the hue of the whole palette (the white base grid
-  stays white; coloured layers cycle).
+- **Farbe** — rotates the hue of the whole palette.
+- **Zusatzfelder** — the coloured field pattern for every layer: Aus (off),
+  2×2, 3×3, Checker, or Zufall (random per layer).
 - **▶/⏸**, **💥 Anstoßen** (kick the stack), **🎲** (re-roll a whole batch).
 
 Below the jam surface: a **Physik (fein)** panel (Dichte, Gravitation,
