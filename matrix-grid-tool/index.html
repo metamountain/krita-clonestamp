@@ -1198,11 +1198,9 @@
     state.camera.eye = +rnd(0.8, 3).toFixed(2);
     state.camera.focal = rndInt(18, 85);
     syncCameraInputs();
-    // Background: mostly black, sometimes a very dark tone
-    const bg = chance(0.75) ? "#000000"
-      : pick(["#0a0a12", "#0d0208", "#04121a", "#12060a", "#080810"]);
-    state.bgColor = bg;
-    bgColorInput.value = bg;
+    // Background: any random colour (never forced black)
+    state.bgColor = randomBgColor();
+    syncBgControls();
 
     // Many layers at once -- a rich stack. Mostly horizontal planes (so the
     // physics stack is lively), occasionally a wall thrown in.
@@ -1259,10 +1257,14 @@
     state.bgColor = bgFromSlider(v);
     syncBgControls();
   }
-  // Random, non-black background (varied hue, dark-to-medium tint).
+  // Random background -- ANY colour: any hue, any brightness (dark to
+  // bright, even near-white). Never forced to black.
+  function randomBgColor() {
+    const c = hslToRgb(Math.random(), 0.15 + Math.random() * 0.65, 0.1 + Math.random() * 0.82);
+    return rgbToHex(c.r, c.g, c.b);
+  }
   function randomBg() {
-    const c = hslToRgb(Math.random(), 0.35 + Math.random() * 0.4, 0.08 + Math.random() * 0.18);
-    state.bgColor = rgbToHex(c.r, c.g, c.b);
+    state.bgColor = randomBgColor();
     syncBgControls();
     render();
   }
@@ -1274,10 +1276,8 @@
       l.accentPhaseA = Math.floor(Math.random() * 7) - 3; // re-offset (incl. -x)
       l.accentPhaseB = Math.floor(Math.random() * 7) - 3; // z/depth, incl. -z
     }
-    // background too: mostly a dark tint, sometimes black
-    const bgv = Math.random() < 0.35 ? 0 : 1 + Math.floor(Math.random() * 100);
-    bgSliderInput.value = bgv;
-    applyBgSlider(bgv);
+    state.bgColor = randomBgColor(); // any colour, never forced black
+    syncBgControls();
     renderLayerList();     // refresh chips
     renderActiveEditor();  // refresh the active editor's colour pickers
     render();
