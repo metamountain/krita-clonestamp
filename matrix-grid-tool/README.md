@@ -33,7 +33,9 @@ dials you scrub for instant, chaotic results:
 
 Below the jam surface: a **Physik (fein)** panel (Dichte, Gravitation,
 Dämpfung) and the **Ebenen** list/editor. The rarely-changed base settings
-(Auflösung with presets incl. **4:5** and **Custom**, Kamera, Hintergrund)
+(Auflösung with presets incl. **4:5** and **Custom**, Kamera, Hintergrund,
+and an optional **Rasterlinien-Limit** — cap the number of grid lines per
+plane, e.g. horizontal 10 / vertical 0 for horizontal bands only)
 live behind the **⚙️ gear** (top-right) so the preview keeps maximum area —
 handy on a phone. The tool opens on a **10-plane stack** at **4:5**; **🗑**
 clears back to one.

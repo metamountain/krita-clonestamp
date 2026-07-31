@@ -544,6 +544,22 @@
         <input type="color" id="bgColor" value="#000000">
       </div>
     </div>
+    <div class="subpanel">
+      <h3>Rasterlinien begrenzen</h3>
+      <div class="row">
+        <label>Begrenzen</label>
+        <input type="checkbox" id="gridLimitOn">
+      </div>
+      <div class="row">
+        <label>Horizontal</label>
+        <input type="number" id="gridLimitH" min="0" max="200" step="1" value="10">
+      </div>
+      <div class="row">
+        <label>Vertikal</label>
+        <input type="number" id="gridLimitV" min="0" max="200" step="1" value="10">
+      </div>
+      <div class="hint">Begrenzt die Anzahl der Gitterlinien je Ebene. 0 = diese Richtung aus (z.B. horizontal 10, vertikal 0 = nur Querlinien).</div>
+    </div>
   </div>
 </div>
 
@@ -694,6 +710,9 @@
     physics: { enabled: true, gravity: 6, damping: 1.4, spread: 0.5 },
     jam: { hue: 0 }, // global hue rotation applied to all layer colours
     fieldsMode: "random", // Zusatzfelder: off | 2x2 | 3x3 | checker | random
+    // optional cap on the number of grid lines per plane (0 = that
+    // direction off). h = horizontal lines, v = vertical/depth lines.
+    gridLimit: { on: false, h: 10, v: 10 },
     clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).
     layers: makeStack(10),
@@ -803,6 +822,18 @@
   const gearClose = document.getElementById("gearClose");
   const settingsOverlay = document.getElementById("settingsOverlay");
   const saveBtn = document.getElementById("saveBtn");
+  const gridLimitOn = document.getElementById("gridLimitOn");
+  const gridLimitH = document.getElementById("gridLimitH");
+  const gridLimitV = document.getElementById("gridLimitV");
+
+  // ---------- Grid line-count limit ----------
+  gridLimitOn.addEventListener("change", () => { state.gridLimit.on = gridLimitOn.checked; render(); });
+  gridLimitH.addEventListener("change", () => {
+    state.gridLimit.h = Math.max(0, Math.round(Number(gridLimitH.value) || 0)); render();
+  });
+  gridLimitV.addEventListener("change", () => {
+    state.gridLimit.v = Math.max(0, Math.round(Number(gridLimitV.value) || 0)); render();
+  });
 
   // ---------- Gear / base-settings overlay ----------
   gearBtn.addEventListener("click", () => { settingsOverlay.hidden = false; });
@@ -1636,6 +1667,22 @@
   }
   const CELL_FILL_MODES = ["cells", "checker", "checkerinv", "diagonal", "rows", "cols", "scatter"];
 
+  // Optional grid-line-count limit. gJRange caps the vertical/depth lines
+  // (symmetric about centre); gKMax caps the horizontal lines. 0 = off.
+  function gJRange(J) {
+    if (!state.gridLimit.on) return [-J, J];
+    const v = state.gridLimit.v;
+    if (v <= 0) return [1, 0]; // empty (hi < lo)
+    const half = Math.floor(v / 2);
+    return [Math.max(-J, -half), Math.min(J, -half + v - 1)];
+  }
+  function gKMax(K, base) { // base = 1 (hplane) or 0 (wall)
+    if (!state.gridLimit.on) return K;
+    const h = state.gridLimit.h;
+    if (h <= 0) return base - 1; // empty (loop won't run)
+    return Math.min(K, base + h - 1);
+  }
+
   function drawLayer(layer) {
     if (!layer.visible) return;
     const alpha = clamp01(layer.opacity / 100);
@@ -1688,23 +1735,26 @@
     // and laterally in x (phaseX) so the plane drifts in both directions.
     const phaseZ = mod(state.clock * (layer.flowSpeed || 0), cell);
     const phaseX = mod(state.clock * (layer.flowX || 0), cell);
+    const [jLo, jHi] = gJRange(J);   // vertical/depth line range
+    const kMax = gKMax(K, 1);        // horizontal (cross) line cap
     // depth lines (run into Z at fixed X), scrolled laterally by phaseX
-    for (let j = -J; j <= J; j += 1) {
+    for (let j = jLo; j <= jHi; j += 1) {
       const X = j * cell - phaseX;
       const p0 = project(X, e, ZNEAR), p1 = project(X, e, ext);
       (linesMode && mod(j + pA, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     // cross lines (run across X at fixed Z), scrolled in depth by phaseZ
-    for (let k = 1; k <= K + 1; k += 1) {
+    for (let k = 1; k <= kMax; k += 1) {
       const Z = k * cell - phaseZ;
       if (Z < ZNEAR || Z > ext) continue;
       const p0 = project(-halfW, e, Z), p1 = project(halfW, e, Z);
       (linesMode && mod(k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     if (cellsMode) {
-      const Jc = Math.min(J, CELL_CAP), Kc = Math.min(K, CELL_CAP);
-      for (let j = -Jc; j < Jc; j += 1) {
-        for (let k = 1; k <= Kc; k += 1) {
+      const cjLo = Math.max(jLo, -CELL_CAP), cjHi = Math.min(jHi, CELL_CAP);
+      const ckMax = Math.min(kMax, CELL_CAP);
+      for (let j = cjLo; j <= cjHi; j += 1) {
+        for (let k = 1; k <= ckMax; k += 1) {
           if (!accentHit(layer, N, j, k, pA, pB)) continue;
           const Z0 = k * cell - phaseZ, Z1 = Z0 + cell;
           if (Z0 < ZNEAR || Z0 > ext) continue;
@@ -1734,23 +1784,26 @@
     // (phaseX) so it drifts in x and y.
     const phaseY = mod(state.clock * (layer.flowSpeed || 0), cell);
     const phaseX = mod(state.clock * (layer.flowX || 0), cell);
+    const [jLo, jHi] = gJRange(Jw);  // vertical line range
+    const kMax = gKMax(Kw, 0);       // horizontal line cap
     // vertical lines (fixed X, Y from 0..H), scrolled laterally
-    for (let j = -Jw; j <= Jw; j += 1) {
+    for (let j = jLo; j <= jHi; j += 1) {
       const X = j * cell - phaseX;
       const p0 = project(X, 0, d), p1 = project(X, H, d);
       (linesMode && mod(j + pA, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     // horizontal lines (fixed Y, X from -halfW..halfW), scrolled vertically
-    for (let k = 0; k <= Kw + 1; k += 1) {
+    for (let k = 0; k <= kMax; k += 1) {
       const Y = k * cell - phaseY;
       if (Y < 0 || Y > H) continue;
       const p0 = project(-halfW, Y, d), p1 = project(halfW, Y, d);
       (linesMode && mod(k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     if (cellsMode) {
-      const Jc = Math.min(Jw, CELL_CAP), Kc = Math.min(Kw, CELL_CAP);
-      for (let j = -Jc; j < Jc; j += 1) {
-        for (let k = 0; k < Kc; k += 1) {
+      const cjLo = Math.max(jLo, -CELL_CAP), cjHi = Math.min(jHi, CELL_CAP);
+      const ckMax = Math.min(kMax, CELL_CAP);
+      for (let j = cjLo; j <= cjHi; j += 1) {
+        for (let k = 0; k <= ckMax; k += 1) {
           if (!accentHit(layer, N, j, k, pA, pB)) continue;
           const Y0 = k * cell - phaseY, Y1 = Y0 + cell;
           if (Y0 < 0 || Y0 > H) continue;
