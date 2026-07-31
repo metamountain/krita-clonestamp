@@ -421,6 +421,11 @@
         <span id="jamHueVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">0°</span>
       </div>
       <div class="row">
+        <label>Hintergrund</label>
+        <input type="range" id="bgSlider" min="0" max="100" step="1" value="0">
+        <span id="bgSliderSw" title="Hintergrundfarbe" style="width:22px;height:22px;border-radius:4px;border:1px solid var(--border);background:#000;flex:0 0 auto;"></span>
+      </div>
+      <div class="row">
         <label>Zusatzfelder</label>
         <select id="fieldsMode">
           <option value="off">Aus</option>
@@ -818,6 +823,8 @@
   const jamHueInput = document.getElementById("jamHue");
   const jamHueVal = document.getElementById("jamHueVal");
   const fieldsModeSelect = document.getElementById("fieldsMode");
+  const bgSliderInput = document.getElementById("bgSlider");
+  const bgSliderSw = document.getElementById("bgSliderSw");
   const gearBtn = document.getElementById("gearBtn");
   const gearClose = document.getElementById("gearClose");
   const settingsOverlay = document.getElementById("settingsOverlay");
@@ -847,6 +854,11 @@
     state.fieldsMode = fieldsModeSelect.value;
     for (const l of state.layers) applyFields(l);
     renderActiveEditor();
+    render();
+  });
+  // Dedicated background-colour slider.
+  bgSliderInput.addEventListener("input", () => {
+    applyBgSlider(Number(bgSliderInput.value));
     render();
   });
 
@@ -1210,6 +1222,17 @@
     const c = hslToRgb(Math.random(), 0.55 + Math.random() * 0.35, 0.5 + Math.random() * 0.2);
     return rgbToHex(c.r, c.g, c.b);
   }
+  // Background slider -> colour: 0 = black, 1..100 = a dark tinted hue.
+  function bgFromSlider(v) {
+    if (v <= 0) return "#000000";
+    const c = hslToRgb((v - 1) / 99, 0.5, 0.11);
+    return rgbToHex(c.r, c.g, c.b);
+  }
+  function applyBgSlider(v) {
+    state.bgColor = bgFromSlider(v);
+    if (bgSliderSw) bgSliderSw.style.background = state.bgColor;
+    if (bgColorInput) bgColorInput.value = state.bgColor; // keep gear picker in sync
+  }
   // Recolour every layer (base plane included) with fresh random colours.
   function randomizeColors() {
     for (const l of state.layers) {
@@ -1218,6 +1241,10 @@
       l.accentPhaseA = Math.floor(Math.random() * 7) - 3; // re-offset (incl. -x)
       l.accentPhaseB = Math.floor(Math.random() * 7) - 3; // z/depth, incl. -z
     }
+    // background too: mostly a dark tint, sometimes black
+    const bgv = Math.random() < 0.35 ? 0 : 1 + Math.floor(Math.random() * 100);
+    bgSliderInput.value = bgv;
+    applyBgSlider(bgv);
     renderLayerList();     // refresh chips
     renderActiveEditor();  // refresh the active editor's colour pickers
     render();

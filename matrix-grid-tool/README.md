@@ -25,6 +25,8 @@ dials you scrub for instant, chaotic results:
 - **H-Ebenen / V-Ebenen** — spawn or remove horizontal planes / vertical
   walls *live* as you turn the dial.
 - **Farbe** — rotates the hue of the whole palette.
+- **Hintergrund** — a dedicated slider for the background colour (0 =
+  black, up = a dark tinted hue); the 🎨 button randomises it too.
 - **Zusatzfelder** — the coloured field pattern for every layer: Aus (off),
   2×2 / 3×3 / 4×4 lattices, Checker, Checker −1 (inverse), Diagonal,
   Reihen (rows), Spalten (columns), Streu (scatter), or Zufall (random
