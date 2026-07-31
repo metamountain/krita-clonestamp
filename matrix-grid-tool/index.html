@@ -422,8 +422,9 @@
       </div>
       <div class="row">
         <label>Hintergrund</label>
-        <input type="range" id="bgSlider" min="0" max="100" step="1" value="0">
-        <span id="bgSliderSw" title="Hintergrundfarbe" style="width:22px;height:22px;border-radius:4px;border:1px solid var(--border);background:#000;flex:0 0 auto;"></span>
+        <input type="range" id="bgSlider" min="0" max="100" step="1" value="60">
+        <input type="color" id="bgPick" title="Hintergrundfarbe wählen" style="width:36px;height:30px;border:1px solid var(--border);border-radius:6px;background:none;padding:0;flex:0 0 auto;">
+        <button id="bgRnd" title="Zufälliger Hintergrund" style="flex:0 0 auto;">🎲</button>
       </div>
       <div class="row">
         <label>Zusatzfelder</label>
@@ -704,7 +705,7 @@
   const state = {
     width: PRESETS[0].w,
     height: PRESETS[0].h,
-    bgColor: "#000000",
+    bgColor: "#0a1622", // dark tint (set from the bg slider on init; not black)
     camera: { eye: 1.6, focal: 50, showHorizon: false },
     anim: { playing: true, speed: 0.05 },
     // Physics for the horizontal-plane stack: gravity pulls planes down,
@@ -824,7 +825,8 @@
   const jamHueVal = document.getElementById("jamHueVal");
   const fieldsModeSelect = document.getElementById("fieldsMode");
   const bgSliderInput = document.getElementById("bgSlider");
-  const bgSliderSw = document.getElementById("bgSliderSw");
+  const bgPick = document.getElementById("bgPick");
+  const bgRnd = document.getElementById("bgRnd");
   const gearBtn = document.getElementById("gearBtn");
   const gearClose = document.getElementById("gearClose");
   const settingsOverlay = document.getElementById("settingsOverlay");
@@ -856,11 +858,17 @@
     renderActiveEditor();
     render();
   });
-  // Dedicated background-colour slider.
+  // Dedicated background controls: slider, colour picker and random button.
   bgSliderInput.addEventListener("input", () => {
     applyBgSlider(Number(bgSliderInput.value));
     render();
   });
+  bgPick.addEventListener("input", () => {
+    state.bgColor = bgPick.value;
+    if (bgColorInput) bgColorInput.value = state.bgColor;
+    render();
+  });
+  bgRnd.addEventListener("click", randomBg);
 
   // ---------- Jam (808) controls ----------
   // H-/V-Ebenen dials spawn or remove layers of a type live; Farbe rotates
@@ -1138,12 +1146,14 @@
   // ---------- Background ----------
   bgColorInput.addEventListener("input", () => {
     state.bgColor = bgColorInput.value;
+    if (bgPick) bgPick.value = state.bgColor;
     render();
   });
   document.querySelectorAll(".swatch").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.bgColor = btn.dataset.c;
       bgColorInput.value = state.bgColor;
+      if (bgPick) bgPick.value = state.bgColor;
       render();
     });
   });
@@ -1235,10 +1245,21 @@
     const c = hslToRgb((v - 1) / 99, 0.5, 0.11);
     return rgbToHex(c.r, c.g, c.b);
   }
+  // Keep all background colour controls (panel picker + gear picker) in sync.
+  function syncBgControls() {
+    if (bgPick) bgPick.value = state.bgColor;
+    if (bgColorInput) bgColorInput.value = state.bgColor;
+  }
   function applyBgSlider(v) {
     state.bgColor = bgFromSlider(v);
-    if (bgSliderSw) bgSliderSw.style.background = state.bgColor;
-    if (bgColorInput) bgColorInput.value = state.bgColor; // keep gear picker in sync
+    syncBgControls();
+  }
+  // Random, non-black background (varied hue, dark-to-medium tint).
+  function randomBg() {
+    const c = hslToRgb(Math.random(), 0.35 + Math.random() * 0.4, 0.08 + Math.random() * 0.18);
+    state.bgColor = rgbToHex(c.r, c.g, c.b);
+    syncBgControls();
+    render();
   }
   // Recolour every layer (base plane included) with fresh random colours.
   function randomizeColors() {
@@ -1987,7 +2008,7 @@
   saveBtn.addEventListener("click", downloadImage);
 
   // ---------- Init ----------
-  bgColorInput.value = state.bgColor;
+  applyBgSlider(Number(bgSliderInput.value)); // default bg from slider (non-black)
   syncCameraInputs();
   animSpeedVal.textContent = state.anim.speed.toFixed(3);
   syncResolutionInputs();
