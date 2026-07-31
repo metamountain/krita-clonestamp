@@ -32,10 +32,11 @@ dials you scrub for instant, chaotic results:
 - **▶/⏸**, **💥 Anstoßen** (kick the stack), **🎲** (re-roll a whole batch).
 
 Below the jam surface: a **Physik (fein)** panel (Dichte, Gravitation,
-Dämpfung), the **Ebenen** list/editor, and — folded away in the collapsible
-**Grundeinstellungen** section — the rarely-changed base settings
-(Auflösung, Kamera, Hintergrund), whose defaults are fine for most work.
-The tool opens on a **10-plane stack**; **🗑** clears back to one.
+Dämpfung) and the **Ebenen** list/editor. The rarely-changed base settings
+(Auflösung with presets incl. **4:5** and **Custom**, Kamera, Hintergrund)
+live behind the **⚙️ gear** (top-right) so the preview keeps maximum area —
+handy on a phone. The tool opens on a **10-plane stack** at **4:5**; **🗑**
+clears back to one.
 
 1. **Auflösung**: pick a resolution preset (default 5:4 portrait,
    1536×1920) or type a custom width/height. The swap button flips
