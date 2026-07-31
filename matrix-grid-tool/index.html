@@ -998,11 +998,14 @@
     animLastTs = ts;
     if (dt > 0.05) dt = 0.05; // clamp big gaps (backgrounded tab) for stability
     const sdt = dt * state.anim.speed;
-    state.clock += sdt;
+    state.clock += sdt; // grid flow follows the (slow) Geschwindigkeit dial
     if (state.physics.enabled) {
-      // fixed-timestep accumulator: integrate physics in constant steps so
-      // motion stays smooth and identical regardless of frame rate.
-      physAccum += sdt;
+      // Physics runs at a lively rate, largely DECOUPLED from the very slow
+      // grid-flow speed -- otherwise it only steps every ~10 frames at low
+      // Geschwindigkeit and looks phlegmatic/jerky. Kept smooth via the
+      // fixed-timestep accumulator.
+      const physSpeed = Math.min(2.2, Math.max(0.8, state.anim.speed * 14));
+      physAccum += dt * physSpeed;
       let steps = 0;
       while (physAccum >= PHYS_DT && steps < 10) { stepPhysics(PHYS_DT); physAccum -= PHYS_DT; steps += 1; }
       if (physAccum > PHYS_DT * 10) physAccum = 0; // avoid spiral of death
@@ -1014,7 +1017,7 @@
     else animRAF = null;
   }
 
-  const SPRING_STIFF = 22; // constant spring stiffness -> planes "einfedern"
+  const SPRING_STIFF = 28; // constant spring stiffness -> planes "einfedern" smoothly
 
   // 1-D vertical physics on the horizontal-plane stack: gravity down,
   // pairwise spring repulsion toward a rest gap (set by Kraftfeld = spread),
