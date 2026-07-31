@@ -390,7 +390,13 @@
           <option value="off">Aus</option>
           <option value="2x2">2×2</option>
           <option value="3x3">3×3</option>
+          <option value="4x4">4×4</option>
           <option value="checker">Checker</option>
+          <option value="checkerinv">Checker −1</option>
+          <option value="diagonal">Diagonal</option>
+          <option value="rows">Reihen</option>
+          <option value="cols">Spalten</option>
+          <option value="scatter">Streu</option>
           <option value="random" selected>Zufall</option>
         </select>
       </div>
@@ -548,6 +554,7 @@
       accentMode: "lines", // 'lines' | 'cells'
       accentColor: "#d02020",
       accentOpacity: 100,
+      accentSeed: Math.floor(Math.random() * 100000), // for the scatter pattern
       // random field offset per layer, in whole cells, on both axes and in
       // both directions (incl. negative -> e.g. x -1, and along -z/depth).
       accentPhaseA: Math.floor(Math.random() * 7) - 3, // x axis: -3..+3
@@ -578,14 +585,22 @@
     };
   }
 
-  // Extra coloured fields ("Zusatzfelder") generator. Modes: off, 2x2, 3x3,
-  // checker, or random (per layer). Applied to a layer's accent settings.
+  // Extra coloured fields ("Zusatzfelder") generator. A whole family of
+  // cell patterns; 'random' picks one per layer.
+  const FIELD_MODES = ["2x2", "3x3", "4x4", "checker", "checkerinv",
+    "diagonal", "rows", "cols", "scatter"];
   function fieldsSpec(mode) {
-    if (mode === "random") mode = ["2x2", "3x3", "checker"][Math.floor(Math.random() * 3)];
+    if (mode === "random") mode = FIELD_MODES[Math.floor(Math.random() * FIELD_MODES.length)];
     switch (mode) {
       case "2x2": return { accentEvery: 2, accentMode: "cells" };
       case "3x3": return { accentEvery: 3, accentMode: "cells" };
+      case "4x4": return { accentEvery: 4, accentMode: "cells" };
       case "checker": return { accentEvery: 2, accentMode: "checker" };
+      case "checkerinv": return { accentEvery: 2, accentMode: "checkerinv" };
+      case "diagonal": return { accentEvery: 3, accentMode: "diagonal" };
+      case "rows": return { accentEvery: 2, accentMode: "rows" };
+      case "cols": return { accentEvery: 2, accentMode: "cols" };
+      case "scatter": return { accentEvery: 2, accentMode: "scatter" };
       default: return { accentEvery: 0, accentMode: "cells" }; // off
     }
   }
@@ -1354,7 +1369,9 @@
     if (layer.accentEvery >= 2) {
       card.appendChild(
         fieldRow("— als", selectInput(
-          [["lines", "Linie"], ["cells", "Fläche (Feld)"], ["checker", "Checker"]],
+          [["lines", "Linie"], ["cells", "Fläche (Feld)"], ["checker", "Checker"],
+           ["checkerinv", "Checker −1"], ["diagonal", "Diagonal"],
+           ["rows", "Reihen"], ["cols", "Spalten"], ["scatter", "Streu"]],
           layer.accentMode,
           (v) => { layer.accentMode = v; render(); }
         ))
@@ -1546,12 +1563,27 @@
   const ZNEAR = 0.25;     // metres; nearest depth we project (avoids /~0)
   const CELL_CAP = 90;    // cap on cell-fill loop range (perf for checker)
 
-  // Does grid cell (j,k) get an accent fill? 'cells' = every-Nth lattice,
-  // 'checker' = checkerboard. Phase offsets shift the pattern per layer.
-  function accentHit(layer, N, j, k, pA, pB) {
-    if (layer.accentMode === "checker") return mod((j + pA) + (k + pB), 2) === 0;
-    return mod(j + pA, N) === 0 && mod(k + pB, N) === 0;
+  // Stable per-cell hash for the scatter pattern (deterministic -> no flicker).
+  function cellHash(a, b, s) {
+    let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(s | 0, 2246822519)) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+    return h >>> 0;
   }
+  // Does grid cell (j,k) get an accent fill? Supports the whole pattern
+  // family. Phase offsets shift the pattern per layer.
+  function accentHit(layer, N, j, k, pA, pB) {
+    const a = j + pA, b = k + pB;
+    switch (layer.accentMode) {
+      case "checker": return mod(a + b, 2) === 0;
+      case "checkerinv": return mod(a + b, 2) === 1;
+      case "diagonal": return mod(a + b, N) === 0;
+      case "rows": return mod(b, N) === 0;
+      case "cols": return mod(a, N) === 0;
+      case "scatter": return cellHash(j, k, layer.accentSeed || 0) % 5 < 2; // ~40%
+      default: return mod(a, N) === 0 && mod(b, N) === 0; // cells (2x2/3x3/4x4)
+    }
+  }
+  const CELL_FILL_MODES = ["cells", "checker", "checkerinv", "diagonal", "rows", "cols", "scatter"];
 
   function drawLayer(layer) {
     if (!layer.visible) return;
@@ -1598,7 +1630,7 @@
     const N = layer.accentEvery >= 2 ? layer.accentEvery : 0;
     const pA = layer.accentPhaseA || 0, pB = layer.accentPhaseB || 0;
     const linesMode = N && layer.accentMode === "lines";
-    const cellsMode = N && (layer.accentMode === "cells" || layer.accentMode === "checker");
+    const cellsMode = N && CELL_FILL_MODES.indexOf(layer.accentMode) !== -1;
     const base = [], acc = [], quads = [];
     const halfW = J * cell;
     // Animation: scroll the grid in depth (phaseZ -> moving "game floor")
@@ -1644,7 +1676,7 @@
     const N = layer.accentEvery >= 2 ? layer.accentEvery : 0;
     const pA = layer.accentPhaseA || 0, pB = layer.accentPhaseB || 0;
     const linesMode = N && layer.accentMode === "lines";
-    const cellsMode = N && (layer.accentMode === "cells" || layer.accentMode === "checker");
+    const cellsMode = N && CELL_FILL_MODES.indexOf(layer.accentMode) !== -1;
     const base = [], acc = [], quads = [];
     const halfW = Jw * cell;
     // Animation: scroll the wall grid vertically (phaseY) and laterally
