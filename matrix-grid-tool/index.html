@@ -879,7 +879,8 @@
   // H-/V-Ebenen dials spawn or remove layers of a type live; Farbe rotates
   // the whole palette. (Geschwindigkeit=animSpeed, Kraftfeld=repulsion are
   // wired below with the other physics/anim controls.)
-  function countType(t) { return state.layers.filter((l) => l.type === t).length; }
+  // Exiting layers don't count toward the target (they're flying out).
+  function countType(t) { return state.layers.filter((l) => l.type === t && !l.exiting).length; }
   function syncJamCounts() {
     if (!jamHCountInput) return;
     const h = countType("hplane"), v = countType("wall");
@@ -891,7 +892,12 @@
     const s = autoStyle(idx);
     const ov = { color: s.color, opacity: s.opacity, flowSpeed: +rnd(0.8, 3.5).toFixed(1),
       flowX: +rnd(-2, 2).toFixed(1), cellM: pick([0.5, 1, 1, 2]) };
-    if (type === "hplane") ov.elevation = +rnd(0, 8).toFixed(1);
+    if (type === "hplane") {
+      // Enter from above the current stack top -> falls/settles in (animated).
+      const es = state.layers.filter((l) => l.type === "hplane" && !l.exiting).map((l) => l.elevation);
+      const top = es.length ? Math.max.apply(null, es) : 0;
+      ov.elevation = +(top + rnd(3, 7)).toFixed(1);
+    }
     if (type === "wall") {
       ov.distance = +rnd(2, 12).toFixed(1); ov.heightM = +rnd(2, 5).toFixed(1);
       ov.widthM = +rnd(4, 10).toFixed(1);
@@ -902,22 +908,61 @@
     applyFields(layer); // Zusatzfelder pattern from the global generator
     state.layers.unshift(layer);
   }
+
+  // Fly-out animation params (demoscene-style soft exit).
+  const EXIT_DUR = 1.1;   // seconds (real time, independent of grid speed)
+  const EXIT_RISE = 34;   // metres a plane rises while flying out
+  function markExiting(layer) {
+    layer.exiting = true;
+    layer.exitT = 0;
+    layer.exitElev0 = layer.elevation;
+    layer.exitDist0 = layer.distance;
+    layer.exitOp0 = layer.opacity;
+  }
+  // Advance flying-out layers each frame; remove them once gone.
+  function updateExits(dt) {
+    let removed = false;
+    for (let i = state.layers.length - 1; i >= 0; i -= 1) {
+      const l = state.layers[i];
+      if (!l.exiting) continue;
+      l.exitT += dt;
+      const p = Math.min(1, l.exitT / EXIT_DUR);
+      const ease = p * p; // accelerate -> whoosh
+      if (l.type === "wall") l.distance = l.exitDist0 + ease * 90; // fly away into depth
+      else l.elevation = l.exitElev0 + ease * EXIT_RISE;           // rise up and out
+      l.opacity = l.exitOp0 * (1 - p);                             // fade softly
+      if (p >= 1) {
+        if (state.activeLayerId === l.id) state.activeLayerId = null;
+        state.layers.splice(i, 1);
+        removed = true;
+      }
+    }
+    if (removed) {
+      if (!getLayer(state.activeLayerId)) state.activeLayerId = state.layers.length ? state.layers[0].id : null;
+      renderLayerList();
+      renderActiveEditor();
+    }
+  }
+
   function setTypeCount(type, n) {
     n = Math.max(0, Math.round(n));
     let cur = countType(type);
     while (cur < n) { spawnLayer(type); cur += 1; }
     if (cur > n) {
-      let toRemove = cur - n;
-      for (let i = 0; i < state.layers.length && toRemove > 0;) {
-        if (state.layers[i].type === type) {
-          const rem = state.layers.splice(i, 1)[0];
-          if (state.activeLayerId === rem.id) state.activeLayerId = null;
-          toRemove -= 1;
-        } else i += 1;
+      // Mark the excess layers as "exiting" -> they fly out (up / away) and
+      // fade, instead of vanishing. Highest/nearest go first.
+      const cand = state.layers.filter((l) => l.type === type && !l.exiting);
+      if (type === "hplane") cand.sort((a, b) => b.elevation - a.elevation);
+      else cand.sort((a, b) => a.distance - b.distance);
+      const excess = cur - n;
+      for (let i = 0; i < excess && i < cand.length; i += 1) markExiting(cand[i]);
+      if (getLayer(state.activeLayerId) && getLayer(state.activeLayerId).exiting) {
+        state.activeLayerId = null;
       }
     }
     if (!getLayer(state.activeLayerId)) {
-      state.activeLayerId = state.layers.length ? state.layers[0].id : null;
+      const rest = state.layers.filter((l) => !l.exiting);
+      state.activeLayerId = rest.length ? rest[0].id : null;
     }
     renderLayerList();
     renderActiveEditor();
@@ -999,6 +1044,7 @@
     if (dt > 0.05) dt = 0.05; // clamp big gaps (backgrounded tab) for stability
     const sdt = dt * state.anim.speed;
     state.clock += sdt; // grid flow follows the (slow) Geschwindigkeit dial
+    updateExits(dt);    // fly-out animation runs at real time (not slowed)
     if (state.physics.enabled) {
       // Physics runs at a lively rate, largely DECOUPLED from the very slow
       // grid-flow speed -- otherwise it only steps every ~10 frames at low
@@ -1025,7 +1071,7 @@
   function stepPhysics(dt) {
     if (dt <= 0) return;
     const P = state.physics;
-    const planes = state.layers.filter((l) => l.type === "hplane");
+    const planes = state.layers.filter((l) => l.type === "hplane" && !l.exiting);
     if (planes.length === 0) return;
     // Kraftfeld / spread sets the rest gap: 0 = tightly packed, 1 = spread out.
     const restLen = lerp(0.3, 5.5, Math.max(0, Math.min(1, P.spread)));
@@ -1335,7 +1381,7 @@
   // toggle). The full controls live in the single "Aktive Ebene" editor.
   function renderLayerList() {
     layerListEl.innerHTML = "";
-    state.layers.forEach((layer) => {
+    state.layers.filter((l) => !l.exiting).forEach((layer) => {
       const row = document.createElement("div");
       row.className = "lrow" + (layer.id === state.activeLayerId ? " active" : "")
         + (layer.visible ? "" : " hidden");

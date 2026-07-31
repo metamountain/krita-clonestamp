@@ -22,8 +22,10 @@ dials you scrub for instant, chaotic results:
 - **Kraftfeld** — the plane density/spacing: turn it up and the planes
   spread apart, down and they spring/settle together ("einfedern"). A
   constant spring stiffness makes them bounce into the new spacing.
-- **H-Ebenen / V-Ebenen** — spawn or remove horizontal planes / vertical
-  walls *live* as you turn the dial.
+- **H-Ebenen / V-Ebenen** — change the number of horizontal planes /
+  vertical walls *live*. New ones drop in from above and settle; removed
+  ones don't just vanish — they physically **fly out** (planes rise up and
+  fade, walls recede into depth), demoscene-style.
 - **Farbe** — rotates the hue of the whole palette.
 - **Hintergrund** — the background colour: a slider (0 = black, up = a
   dark tinted hue), a colour picker, and a 🎲 button that randomises just
