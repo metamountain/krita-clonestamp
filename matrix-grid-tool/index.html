@@ -2008,7 +2008,7 @@
   saveBtn.addEventListener("click", downloadImage);
 
   // ---------- Init ----------
-  applyBgSlider(Number(bgSliderInput.value)); // default bg from slider (non-black)
+  randomBg(); // start on a random (non-black, not-always-blue) background
   syncCameraInputs();
   animSpeedVal.textContent = state.anim.speed.toFixed(3);
   syncResolutionInputs();
