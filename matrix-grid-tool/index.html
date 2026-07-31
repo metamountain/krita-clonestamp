@@ -453,13 +453,13 @@
       </div>
       <div class="row">
         <label>Gravitation</label>
-        <input type="range" id="physGravity" min="0" max="20" step="0.5" value="6">
-        <span id="physGravityVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">6</span>
+        <input type="range" id="physGravity" min="0" max="20" step="0.5" value="4">
+        <span id="physGravityVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">4</span>
       </div>
       <div class="row">
         <label>Dämpfung</label>
-        <input type="range" id="physDamping" min="0.5" max="9" step="0.1" value="3.5">
-        <span id="physDampingVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">3.5</span>
+        <input type="range" id="physDamping" min="0.3" max="9" step="0.1" value="2.2">
+        <span id="physDampingVal" style="min-width:34px;text-align:right;color:var(--text-dim);font-size:12px;">2.2</span>
       </div>
       <div class="hint">Feinabstimmung des Stapels: Gravitation zieht nach unten, Dämpfung = wie schnell er sich beruhigt (klein = federt stärker). Der Abstand/die Dichte kommt vom Kraftfeld oben.</div>
     </section>
@@ -718,7 +718,7 @@
     // spread = plane spacing/density (driven by the Kraftfeld dial): higher
     // = planes pushed further apart. A constant spring stiffness makes them
     // "einfedern" (spring/settle) into the new spacing.
-    physics: { enabled: true, gravity: 6, damping: 3.5, spread: 0.5 },
+    physics: { enabled: true, gravity: 4, damping: 2.2, spread: 0.5 },
     jam: { hue: 0 }, // global hue rotation applied to all layer colours
     fieldsMode: "random", // Zusatzfelder: off | 2x2 | 3x3 | checker | random
     // optional cap on the number of grid lines per plane (0 = that
@@ -927,7 +927,9 @@
       if (!l.exiting) continue;
       l.exitT += dt;
       const p = Math.min(1, l.exitT / EXIT_DUR);
-      const ease = p * p; // accelerate -> whoosh
+      // easeInBack: dips back a touch (anticipation) then whooshes out.
+      const bk = 1.9;
+      const ease = p * p * ((bk + 1) * p - bk);
       if (l.type === "wall") l.distance = l.exitDist0 + ease * 90; // fly away into depth
       else l.elevation = l.exitElev0 + ease * EXIT_RISE;           // rise up and out
       l.opacity = l.exitOp0 * (1 - p);                             // fade softly
@@ -1063,11 +1065,12 @@
     else animRAF = null;
   }
 
-  const SPRING_STIFF = 42; // constant spring stiffness -> snappy, spontaneous response
+  const SPRING_STIFF = 30; // softer spring + low damping -> springy overshoot ("flow")
 
-  // 1-D vertical physics on the horizontal-plane stack: gravity down,
-  // pairwise spring repulsion toward a rest gap (set by Kraftfeld = spread),
-  // floor at 0, light damping so they spring/settle into their spacing.
+  // Vertical physics on the horizontal-plane stack: a real SPRING CHAIN --
+  // adjacent planes are linked by springs at the rest gap (attract when too
+  // far, repel when too close), so disturbances overshoot and swing back
+  // ("flow"). Gravity pulls the chain down; the floor holds the bottom.
   function stepPhysics(dt) {
     if (dt <= 0) return;
     const P = state.physics;
@@ -1079,25 +1082,20 @@
       if (typeof l.vel !== "number") l.vel = 0;
       l.vel -= P.gravity * dt; // gravity pulls down
     }
-    for (let a = 0; a < planes.length; a += 1) {
-      for (let b = a + 1; b < planes.length; b += 1) {
-        const la = planes[a], lb = planes[b];
-        const d = lb.elevation - la.elevation;
-        const gap = Math.abs(d);
-        if (gap < restLen) {
-          const dir = d >= 0 ? 1 : -1;
-          const f = SPRING_STIFF * (restLen - gap);
-          lb.vel += dir * f * dt;
-          la.vel -= dir * f * dt;
-        }
-      }
+    // Springs between vertically-adjacent planes (two-sided -> oscillates).
+    const sorted = planes.slice().sort((a, b) => a.elevation - b.elevation);
+    for (let i = 0; i < sorted.length - 1; i += 1) {
+      const lo = sorted[i], hi = sorted[i + 1];
+      const f = SPRING_STIFF * ((hi.elevation - lo.elevation) - restLen);
+      hi.vel -= f * dt; // too far -> pulled together; too close -> pushed apart
+      lo.vel += f * dt;
     }
     for (const l of planes) {
       l.vel -= l.vel * Math.min(1, P.damping * dt); // damping
-      if (l.vel > 30) l.vel = 30; else if (l.vel < -30) l.vel = -30; // stability clamp
+      if (l.vel > 40) l.vel = 40; else if (l.vel < -40) l.vel = -40; // stability clamp
       l.elevation += l.vel * dt;
-      if (l.elevation < 0) { l.elevation = 0; if (l.vel < 0) l.vel = -l.vel * 0.3; }
-      if (l.elevation > 60) { l.elevation = 60; if (l.vel > 0) l.vel = -l.vel * 0.3; }
+      if (l.elevation < 0) { l.elevation = 0; if (l.vel < 0) l.vel = -l.vel * 0.35; }
+      if (l.elevation > 60) { l.elevation = 60; if (l.vel > 0) l.vel = -l.vel * 0.35; }
     }
   }
 
