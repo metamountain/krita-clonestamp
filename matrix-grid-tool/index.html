@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Matrix Grid Tool</title>
+<title>Gridmaster 2000</title>
 <style>
   :root {
     color-scheme: dark;
@@ -333,9 +333,12 @@
     #canvas { max-height: 58vh; }    /* maximise the preview area */
   }
 
-  /* Floating gear (base settings) + overlay */
-  #gearBtn {
+  /* Floating actions (save + gear) + overlay */
+  #floatBtns {
     position: fixed; top: 10px; right: 10px; z-index: 40;
+    display: flex; gap: 8px;
+  }
+  #floatBtns button {
     width: 42px; height: 42px; padding: 0;
     border-radius: 50%; font-size: 20px; line-height: 1;
     background: rgba(20,22,28,.75); border: 1px solid var(--border);
@@ -369,7 +372,7 @@
 <div id="app">
   <header>
     <div>
-      <h1>Matrix Grid Tool</h1>
+      <h1>Gridmaster 2000</h1>
       <div class="sub">Grid-Referenzbilder für KI-Bildgenerierung</div>
     </div>
   </header>
@@ -385,7 +388,7 @@
     <!-- ===== MODIFIKATOREN (Hauptfokus) ===== -->
 
     <section class="panel jam">
-      <h2>Jam (808)</h2>
+      <h2>Gridmaster 2000</h2>
       <div class="row" style="gap:6px;">
         <button id="playBtn" class="primary" title="Abspielen/Pause" style="flex:1 1 auto;">⏸</button>
         <button id="colorBtn" title="Alle Ebenen neu einfärben" style="flex:0 0 auto;">🎨</button>
@@ -485,8 +488,11 @@
   </div>
 </div>
 
-<!-- ===== GRUNDEINSTELLUNGEN unter dem Zahnrad ===== -->
-<button id="gearBtn" title="Grundeinstellungen">⚙️</button>
+<!-- ===== Schwebende Aktionen (Speichern + Zahnrad) ===== -->
+<div id="floatBtns">
+  <button id="saveBtn" title="Bild speichern (JPEG)">💾</button>
+  <button id="gearBtn" title="Grundeinstellungen">⚙️</button>
+</div>
 <div id="settingsOverlay" hidden>
   <div class="overlay-card">
     <div class="overlay-head">
@@ -796,6 +802,7 @@
   const gearBtn = document.getElementById("gearBtn");
   const gearClose = document.getElementById("gearClose");
   const settingsOverlay = document.getElementById("settingsOverlay");
+  const saveBtn = document.getElementById("saveBtn");
 
   // ---------- Gear / base-settings overlay ----------
   gearBtn.addEventListener("click", () => { settingsOverlay.hidden = false; });
@@ -1849,20 +1856,22 @@
     qualityVal.textContent = Math.round(Number(qualityInput.value) * 100) + "%";
   });
 
-  exportBtn.addEventListener("click", () => {
+  function downloadImage() {
     render();
     canvas.toBlob((blob) => {
       if (!blob) return;
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "matrix-grid-" + state.width + "x" + state.height + ".jpg";
+      a.download = "gridmaster-" + state.width + "x" + state.height + ".jpg";
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
     }, "image/jpeg", Number(qualityInput.value));
-  });
+  }
+  exportBtn.addEventListener("click", downloadImage);
+  saveBtn.addEventListener("click", downloadImage);
 
   // ---------- Init ----------
   bgColorInput.value = state.bgColor;
