@@ -397,8 +397,8 @@
       </div>
       <div class="row">
         <label>Geschwindigkeit</label>
-        <input type="range" id="animSpeed" min="0" max="3" step="0.02" value="1">
-        <span id="animSpeedVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">1.0×</span>
+        <input type="range" id="animSpeed" min="0" max="0.1" step="0.002" value="0.05">
+        <span id="animSpeedVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">0.05</span>
       </div>
       <div class="row">
         <label>Kraftfeld</label>
@@ -706,7 +706,7 @@
     height: PRESETS[0].h,
     bgColor: "#000000",
     camera: { eye: 1.6, focal: 50, showHorizon: false },
-    anim: { playing: true, speed: 1 },
+    anim: { playing: true, speed: 0.05 },
     // Physics for the horizontal-plane stack: gravity pulls planes down,
     // repulsion spaces them out, density sets the rest gap between them.
     // spread = plane spacing/density (driven by the Kraftfeld dial): higher
@@ -1068,7 +1068,7 @@
   });
   animSpeedInput.addEventListener("input", () => {
     state.anim.speed = Number(animSpeedInput.value);
-    animSpeedVal.textContent = state.anim.speed.toFixed(1) + "×";
+    animSpeedVal.textContent = state.anim.speed.toFixed(3);
     if (!state.anim.playing) render();
   });
 
@@ -1989,7 +1989,7 @@
   // ---------- Init ----------
   bgColorInput.value = state.bgColor;
   syncCameraInputs();
-  animSpeedVal.textContent = state.anim.speed.toFixed(1) + "×";
+  animSpeedVal.textContent = state.anim.speed.toFixed(3);
   syncResolutionInputs();
   resizeCanvas();
   renderLayerList();
