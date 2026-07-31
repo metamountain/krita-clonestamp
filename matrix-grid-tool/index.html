@@ -652,7 +652,12 @@
   const FIELD_MODES = ["2x2", "3x3", "4x4", "checker", "checkerinv",
     "diagonal", "rows", "cols", "scatter"];
   function fieldsSpec(mode) {
-    if (mode === "random") mode = FIELD_MODES[Math.floor(Math.random() * FIELD_MODES.length)];
+    if (mode === "random") {
+      // Mix: some layers stay plain line grids (no fill), others get a
+      // random pattern -- so not every plane is filled.
+      mode = Math.random() < 0.45 ? "off"
+        : FIELD_MODES[Math.floor(Math.random() * FIELD_MODES.length)];
+    }
     switch (mode) {
       case "2x2": return { accentEvery: 2, accentMode: "cells" };
       case "3x3": return { accentEvery: 3, accentMode: "cells" };

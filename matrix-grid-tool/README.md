@@ -32,7 +32,8 @@ dials you scrub for instant, chaotic results:
 - **Zusatzfelder** — the coloured field pattern for every layer: Aus (off),
   2×2 / 3×3 / 4×4 lattices, Checker, Checker −1 (inverse), Diagonal,
   Reihen (rows), Spalten (columns), Streu (scatter), or Zufall (random
-  per layer). Each layer can also override its own pattern in the editor.
+  per layer — a mix, where some layers stay plain line grids and others
+  get a pattern). Each layer can also override its own pattern in the editor.
 - **▶/⏸**, **💥 Anstoßen** (kick the stack), **🎲** (re-roll a whole batch).
 
 Below the jam surface: a **Physik (fein)** panel (Dichte, Gravitation,
