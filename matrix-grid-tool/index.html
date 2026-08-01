@@ -1189,24 +1189,30 @@
   function bodyPlanes() {
     return state.layers.filter((l) => l.type === "hplane" && !l.exiting);
   }
-  // Each body is nailed to ONE plane (by its stable fraction). It inherits that
-  // plane's elevation -- so as the plane bobs under gravity / the spring stack,
-  // the body rides up and down WITH it -- and that plane's cell size and scroll.
-  // Bias toward the LOWER planes (quadratic) so most bodies roll through the
-  // visible foreground floor, with only a few floating on the higher planes.
+  // Each body is nailed to ONE plane by a stable OBJECT REFERENCE (not a sorted
+  // index). It inherits that plane's elevation -- so as the plane bobs under
+  // gravity / the spring stack, the body rides up and down WITH it -- and that
+  // plane's cell size and scroll. Using a fixed reference means the anchor does
+  // NOT change when two planes cross in elevation (which would otherwise make
+  // the body jump/twitch); we only re-pick if the anchored plane disappears.
+  // The pick is biased toward the LOWER planes (quadratic) so most bodies roll
+  // through the visible foreground floor, with only a few on the higher planes.
   function bodyPlane(b) {
     const ps = bodyPlanes();
     if (!ps.length) return null;
+    if (b.planeRef && ps.indexOf(b.planeRef) !== -1) return b.planeRef;
     const sorted = ps.slice().sort((a, c) => a.elevation - c.elevation);
     const f = (b.frac != null ? b.frac : 0.5);
     const idx = Math.min(sorted.length - 1, Math.floor(f * f * sorted.length));
-    return sorted[idx];
+    b.planeRef = sorted[idx];
+    return b.planeRef;
   }
   function bodyCellOf(p) { return p && p.cellM > 0 ? p.cellM : 1; }
 
   function spawnBody(b, near) {
     b = b || {};
     b.frac = Math.random();                              // stable anchor pick (low-biased)
+    b.planeRef = null;                                   // re-pick a fresh anchor on (re)spawn
     b.cubes = BODY_SHAPES[Math.floor(Math.random() * BODY_SHAPES.length)];
     b.unit = pick([1, 1, 1, 2, 2, 3]);                   // size in whole cells (mostly small)
     const cell = bodyCellOf(bodyPlane(b)) * b.unit;
@@ -1243,12 +1249,13 @@
   function drawBodies() {
     for (const b of state.bodies) {
       const p = bodyPlane(b);
-      const baseCell = bodyCellOf(p);
-      const cell = baseCell * (b.unit || 1); // each cube spans `unit` cells
+      const cell = bodyCellOf(p) * (b.unit || 1); // each cube spans `unit` cells
       const baseY = p ? p.elevation : 0;   // sit ON the (moving) plane
-      // share the plane's lateral phase (in its BASE cell) so the cube columns
-      // stay exactly on its depth lines even when the body is scaled up.
-      const phaseX = p ? mod(state.clock * (p.flowX || 0), baseCell) : 0;
+      // NOTE: the body keeps a FIXED world x (= gx*cell). We deliberately do not
+      // apply the plane's lateral scroll here -- a sawtooth phase would make the
+      // body hop sideways by a cell each wrap ("zucken"), and a continuous drift
+      // would slide it off to the side. It rides only in Z (toward the viewer)
+      // and Y (the plane's elevation).
       const col = shiftHue(b.color, state.jam.hue);
       const cubeSet = new Set(b.cubes.map((c) => c[0] + "," + c[1] + "," + c[2]));
       const segs = [], faces = [];
@@ -1257,7 +1264,7 @@
         // 8 projected corners of this cube (corner bits: x=1, y=2, z=4)
         const cs = [];
         for (let i = 0; i < 8; i += 1) {
-          const w = bodyCorner(b, cell, phaseX, baseY, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
+          const w = bodyCorner(b, cell, baseY, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
           if (w.z < ZNEAR) { ok = false; break; }
           cs.push(w);
         }
@@ -1286,8 +1293,8 @@
   // World position of one axis-aligned cube corner (no rotation): grid column
   // gx, cube offset (lx,ly,lz), each step = one `cell` (already unit-scaled),
   // base sitting on the anchored plane (baseY = its current elevation).
-  function bodyCorner(b, cell, phaseX, baseY, lx, ly, lz) {
-    const wx = (b.gx + lx) * cell - phaseX;
+  function bodyCorner(b, cell, baseY, lx, ly, lz) {
+    const wx = (b.gx + lx) * cell;
     const wy = baseY + ly * cell;
     const wz = b.z + lz * cell;
     const p = project(wx, wy, wz);
