@@ -1022,7 +1022,7 @@
   });
   kickBtn.addEventListener("click", () => {
     for (const l of state.layers) {
-      if (l.type === "hplane") l.vel += (Math.random() - 0.3) * 6;
+      if (l.type === "hplane") l.vel += (Math.random() - 0.3) * 10;
     }
   });
   // Kraftfeld = spread (plane density/spacing).
@@ -1072,8 +1072,11 @@
     let dt = (ts - animLastTs) / 1000;
     animLastTs = ts;
     if (dt > 0.05) dt = 0.05; // clamp big gaps (backgrounded tab) for stability
-    const sdt = dt * state.anim.speed;
-    state.clock += sdt; // grid flow follows the (slow) Geschwindigkeit dial
+    // FLOW_GAIN lifts the whole perspective scroll (and the bodies glued to it)
+    // to a lively "game floor" pace while keeping the Geschwindigkeit dial's
+    // feel -- both grid and bodies speed up together and stay in sync.
+    const sdt = dt * state.anim.speed * FLOW_GAIN;
+    state.clock += sdt; // grid flow follows the Geschwindigkeit dial (x FLOW_GAIN)
     updateExits(dt);    // fly-out animation runs at real time (not slowed)
     updateBodies(sdt);  // bodies ride the floor at the grid tempo
     if (state.physics.enabled) {
@@ -1081,7 +1084,7 @@
       // grid-flow speed -- otherwise it only steps every ~10 frames at low
       // Geschwindigkeit and looks phlegmatic/jerky. Kept smooth via the
       // fixed-timestep accumulator.
-      const physSpeed = Math.min(4, Math.max(1.5, state.anim.speed * 14));
+      const physSpeed = Math.min(6, Math.max(2.5, state.anim.speed * 18));
       physAccum += dt * physSpeed;
       let steps = 0;
       while (physAccum >= PHYS_DT && steps < 10) { stepPhysics(PHYS_DT); physAccum -= PHYS_DT; steps += 1; }
@@ -1094,7 +1097,8 @@
     else animRAF = null;
   }
 
-  const SPRING_STIFF = 30; // softer spring + low damping -> springy overshoot ("flow")
+  const FLOW_GAIN = 4.5;   // global multiplier on the grid/body scroll pace
+  const SPRING_STIFF = 38; // spring + low damping -> punchy, springy overshoot ("flow")
 
   // Vertical physics on the horizontal-plane stack: a real SPRING CHAIN --
   // adjacent planes are linked by springs at the rest gap (attract when too
@@ -1141,49 +1145,80 @@
   }
 
   // ---------- Grid-aligned wireframe bodies (Tetris-like) ----------
-  // Axis-aligned polycubes built ON the floor grid: every unit cube is exactly
-  // one grid cell, the body rests flat on the ground (base at y = 0) snapped to
-  // grid columns, and it RIDES the floor -- translating toward the viewer in Z
-  // at the floor's own scroll rate -- so it stays locked inside the moving
-  // grid. No rotation and no arbitrary scale: the edges stay rectangular and
-  // perspective-correct, projected through the same camera as the grids.
+  // Axis-aligned polycubes anchored ON a plane: every cube spans `unit` grid
+  // cells, the body sits on its plane snapped to grid columns, and it RIDES the
+  // plane -- translating toward the viewer in Z at the plane's scroll rate --
+  // so it stays locked inside the moving grid. No rotation and no arbitrary
+  // scale (only whole-cell size steps): edges stay rectangular and
+  // perspective-correct. Faces are filled very faintly for a solid, plastic
+  // look while the wireframe keeps the ghostly demoscene feel.
+  //
+  // Shapes are genuine 3D polycubes (extended in x, y AND z where noted), given
+  // as integer unit-cube offsets. Bias is toward chunky spatial blocks.
   const BODY_SHAPES = [
-    [[0,0,0],[1,0,0],[2,0,0],[3,0,0]],           // I (flat, along X)
-    [[0,0,0],[1,0,0],[0,1,0],[1,1,0]],           // O (upright square)
-    [[0,0,0],[1,0,0],[2,0,0],[1,1,0]],           // T (upright)
-    [[0,0,0],[0,1,0],[0,2,0],[1,0,0]],           // L (upright)
-    [[1,0,0],[2,0,0],[0,1,0],[1,1,0]],           // S (upright)
-    [[0,0,0],[1,0,0],[0,0,1],[1,0,1]],           // flat 2x2 slab in XZ
     [[0,0,0],[1,0,0],[0,0,1],[1,0,1],[0,1,0],[1,1,0],[0,1,1],[1,1,1]], // 2x2x2 box
+    [[0,0,0],[0,1,0],[0,2,0]],                                          // 1x3 tower
+    [[0,0,0],[1,0,0],[2,0,0],[0,0,1],[1,0,1],[2,0,1]],                  // 3x1x2 brick
+    [[0,0,0],[1,0,0],[0,0,1],[1,0,1]],                                  // 2x1x2 slab
+    [[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1],[2,0,0],[2,0,1]], // 2x2x2 + step
+    [[0,0,0],[0,1,0],[1,0,0],[1,0,1]],                                  // L extruded in z
+    [[0,0,0],[1,0,0],[2,0,0],[1,1,0],[1,0,1]],                          // T with a z-nub (3D T)
+    [[1,0,0],[2,0,0],[0,1,0],[1,1,0],[1,0,1],[1,1,1]],                  // S extruded (depth 2)
+    [[0,0,0],[0,1,0],[0,2,0],[0,0,1],[0,2,1]],                          // U-frame (upright)
+    [[1,0,0],[0,1,0],[1,1,0],[2,1,0],[1,2,0],[1,1,1]],                  // 3D plus / cross
+    [[0,0,0],[1,0,0],[1,1,0],[2,1,0],[2,2,0],[2,2,1]],                  // 3-step staircase
+    [[0,0,0],[1,0,0],[0,0,1],[0,1,0]],                                  // corner tripod
+    [[0,0,0],[1,0,0],[2,0,0],[3,0,0]],                                  // I bar (flat, variety)
+    [[0,0,0],[1,0,0],[0,1,0],[1,1,0]],                                  // O square (flat, variety)
   ];
   const BODY_HUES = ["#ffffff", "#bfe8ff", "#ffd7f0", "#d8ffd8", "#fff0c8"];
   const CUBE_EDGES = [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]];
+  // The 6 cube faces as (corner-index quad, neighbour direction). Corner index
+  // bits are (x=1, y=2, z=4); a face is only filled when no sibling cube abuts
+  // it, so shared interior faces never double-fill.
+  const CUBE_FACES = [
+    { q: [0,2,6,4], d: [-1, 0, 0] }, // -x
+    { q: [1,5,7,3], d: [ 1, 0, 0] }, // +x
+    { q: [0,4,5,1], d: [ 0,-1, 0] }, // -y
+    { q: [2,3,7,6], d: [ 0, 1, 0] }, // +y
+    { q: [0,1,3,2], d: [ 0, 0,-1] }, // -z
+    { q: [4,6,7,5], d: [ 0, 0, 1] }, // +z
+  ];
 
   // The horizontal planes bodies can be anchored to (the moving stack).
   function bodyPlanes() {
     return state.layers.filter((l) => l.type === "hplane" && !l.exiting);
   }
-  // Each body is nailed to ONE plane (by its stable slot). It inherits that
+  // Each body is nailed to ONE plane (by its stable fraction). It inherits that
   // plane's elevation -- so as the plane bobs under gravity / the spring stack,
   // the body rides up and down WITH it -- and that plane's cell size and scroll.
+  // Bias toward the LOWER planes (quadratic) so most bodies roll through the
+  // visible foreground floor, with only a few floating on the higher planes.
   function bodyPlane(b) {
     const ps = bodyPlanes();
-    return ps.length ? ps[b.slot % ps.length] : null;
+    if (!ps.length) return null;
+    const sorted = ps.slice().sort((a, c) => a.elevation - c.elevation);
+    const f = (b.frac != null ? b.frac : 0.5);
+    const idx = Math.min(sorted.length - 1, Math.floor(f * f * sorted.length));
+    return sorted[idx];
   }
   function bodyCellOf(p) { return p && p.cellM > 0 ? p.cellM : 1; }
 
   function spawnBody(b, near) {
     b = b || {};
-    b.slot = Math.floor(Math.random() * 9973);           // stable anchor plane pick
+    b.frac = Math.random();                              // stable anchor pick (low-biased)
     b.cubes = BODY_SHAPES[Math.floor(Math.random() * BODY_SHAPES.length)];
-    const cell = bodyCellOf(bodyPlane(b));
+    b.unit = pick([1, 1, 1, 2, 2, 3]);                   // size in whole cells (mostly small)
+    const cell = bodyCellOf(bodyPlane(b)) * b.unit;
     b.gx = Math.round(rnd(-8, 8));                        // integer grid column
-    // world depth, snapped to whole cells so the cube faces line up with the
-    // plane's cross lines; start far (or near, when riding "backwards").
-    const zc = near ? rnd(4, 10) : rnd(28, 46);
+    // world depth, snapped to a whole (scaled) cell so the cube faces line up
+    // with the plane's cross lines. Respawn far (or near when riding backwards);
+    // the INITIAL population (near === undefined) spreads across the whole field
+    // so there is always a chunky body up close, not just a distant cluster.
+    const zc = near === true ? rnd(4, 10) : near === false ? rnd(24, 42) : rnd(4, 42);
     b.z = Math.round(zc / cell) * cell;
     b.color = BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)];
-    b.opacity = rnd(14, 26);   // faint / ghostly, but perceptible over grids
+    b.opacity = rnd(18, 32);   // faint / ghostly, but perceptible over grids
     b.lineWidth = rnd(1, 2);
     return b;
   }
@@ -1208,13 +1243,18 @@
   function drawBodies() {
     for (const b of state.bodies) {
       const p = bodyPlane(b);
-      const cell = bodyCellOf(p);
+      const baseCell = bodyCellOf(p);
+      const cell = baseCell * (b.unit || 1); // each cube spans `unit` cells
       const baseY = p ? p.elevation : 0;   // sit ON the (moving) plane
-      // share the plane's lateral phase so the cube columns stay on its depth lines
-      const phaseX = p ? mod(state.clock * (p.flowX || 0), cell) : 0;
-      const segs = [];
+      // share the plane's lateral phase (in its BASE cell) so the cube columns
+      // stay exactly on its depth lines even when the body is scaled up.
+      const phaseX = p ? mod(state.clock * (p.flowX || 0), baseCell) : 0;
+      const col = shiftHue(b.color, state.jam.hue);
+      const cubeSet = new Set(b.cubes.map((c) => c[0] + "," + c[1] + "," + c[2]));
+      const segs = [], faces = [];
       let ok = true;
       for (const cube of b.cubes) {
+        // 8 projected corners of this cube (corner bits: x=1, y=2, z=4)
         const cs = [];
         for (let i = 0; i < 8; i += 1) {
           const w = bodyCorner(b, cell, phaseX, baseY, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
@@ -1223,13 +1263,25 @@
         }
         if (!ok) break;
         for (const e of CUBE_EDGES) segs.push([cs[e[0]].x, cs[e[0]].y, cs[e[1]].x, cs[e[1]].y]);
+        // only outer (unshared) faces get filled -> no interior double-fill
+        for (const f of CUBE_FACES) {
+          const nk = (cube[0] + f.d[0]) + "," + (cube[1] + f.d[1]) + "," + (cube[2] + f.d[2]);
+          if (cubeSet.has(nk)) continue;
+          const a = cs[f.q[0]], bb = cs[f.q[1]], cc = cs[f.q[2]], dd = cs[f.q[3]];
+          faces.push({ z: (a.z + bb.z + cc.z + dd.z) * 0.25,
+                       q: [[a.x, a.y], [bb.x, bb.y], [cc.x, cc.y], [dd.x, dd.y]] });
+        }
       }
-      if (ok && segs.length) strokeSegs(segs, shiftHue(b.color, state.jam.hue), b.lineWidth, clamp01(b.opacity / 100));
+      if (!ok || !segs.length) continue;
+      // faint filled faces first (back-to-front), then the wireframe on top
+      faces.sort((u, v) => v.z - u.z);
+      fillQuads(faces.map((f) => f.q), col, clamp01(b.opacity / 100) * 0.5);
+      strokeSegs(segs, col, b.lineWidth, clamp01(b.opacity / 100));
     }
   }
   // World position of one axis-aligned cube corner (no rotation): grid column
-  // gx, unit cube offset (lx,ly,lz), each unit = one plane cell, base sitting on
-  // the anchored plane (baseY = its current elevation).
+  // gx, cube offset (lx,ly,lz), each step = one `cell` (already unit-scaled),
+  // base sitting on the anchored plane (baseY = its current elevation).
   function bodyCorner(b, cell, phaseX, baseY, lx, ly, lz) {
     const wx = (b.gx + lx) * cell - phaseX;
     const wy = baseY + ly * cell;

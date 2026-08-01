@@ -18,7 +18,8 @@ works fine over `file://`, no server or install required).
 The UI is built like a **TR-808-style jam surface** — a row of performance
 dials you scrub for instant, chaotic results:
 
-- **Geschwindigkeit** — global animation speed.
+- **Geschwindigkeit** — global animation speed. Drives a lively "game floor"
+  scroll; the bodies glued to the grid ride along at the same pace.
 - **Kraftfeld** — the plane density/spacing: turn it up and the planes
   spread apart, down and they spring/settle together ("einfedern"). A
   constant spring stiffness makes them bounce into the new spacing.
@@ -27,13 +28,17 @@ dials you scrub for instant, chaotic results:
   ones don't just vanish — they physically **fly out** (planes rise up and
   fade, walls recede into depth), demoscene-style.
 - **Farbe** — rotates the hue of the whole palette.
-- **Körper** — number of faint, ghostly Tetris-like wireframe solids. They
-  are **axis-aligned** boxes (each unit cube = one grid cell), **anchored to
-  the horizontal planes**: a body sits on its plane and rides up and down with
-  it, so the **same gravity/spring physics that moves the planes moves the
-  bodies** — kick the stack and they bounce along. They stay snapped to the
-  grid and ride the plane's scroll toward the viewer. No tumbling, no arbitrary
-  scale; perspective-correct (0 = none).
+- **Körper** — number of faint, ghostly Tetris-like solids. They are **genuine
+  3D**, **axis-aligned** polycubes from a varied catalogue (boxes, towers,
+  bricks, extruded L/T/S, U-frames, crosses, staircases…) in **mixed sizes**
+  (whole-cell steps), rendered as wireframes with **very lightly filled faces**
+  so they read as solid but stay ghostly. Each body is **anchored to a
+  horizontal plane** (mostly the lower/foreground ones): it sits on its plane
+  and rides up and down with it, so the **same gravity/spring physics that
+  moves the planes moves the bodies** — kick the stack and they bounce along.
+  They stay snapped to the grid and ride the plane's scroll toward the viewer,
+  growing as they approach. No tumbling, no arbitrary scale; perspective-correct
+  (0 = none).
 - **Hintergrund** — the background colour: a slider (0 = black, up = a
   dark tinted hue), a colour picker, and a 🎲 button that randomises just
   the background. Default is a dark tint (not black). The 🎨 palette
