@@ -27,8 +27,11 @@ dials you scrub for instant, chaotic results:
   ones don't just vanish — they physically **fly out** (planes rise up and
   fade, walls recede into depth), demoscene-style.
 - **Farbe** — rotates the hue of the whole palette.
-- **Körper** — number of faint, ghostly Tetris-like wireframe solids that
-  drift slowly through the grid space, anchored in the same 3D camera
+- **Körper** — number of faint, ghostly Tetris-like wireframe solids. They
+  are **axis-aligned** boxes built on the floor grid (each unit cube = one
+  grid cell), sit flat on the ground snapped to the grid, and **ride the
+  floor** — travelling toward the viewer at the floor's own scroll rate — so
+  they stay locked in the moving grid. No tumbling; perspective-correct
   (0 = none).
 - **Hintergrund** — the background colour: a slider (0 = black, up = a
   dark tinted hue), a colour picker, and a 🎲 button that randomises just

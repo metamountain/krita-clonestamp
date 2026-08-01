@@ -1075,7 +1075,7 @@
     const sdt = dt * state.anim.speed;
     state.clock += sdt; // grid flow follows the (slow) Geschwindigkeit dial
     updateExits(dt);    // fly-out animation runs at real time (not slowed)
-    updateBodies(dt);   // ghostly bodies drift slowly in real time
+    updateBodies(sdt);  // bodies ride the floor at the grid tempo
     if (state.physics.enabled) {
       // Physics runs at a lively rate, largely DECOUPLED from the very slow
       // grid-flow speed -- otherwise it only steps every ~10 frames at low
@@ -1140,37 +1140,43 @@
     }
   }
 
-  // ---------- Ghostly Tetris-like wireframe bodies ----------
-  // Simple polycube shapes (integer unit-cube offsets). Rendered as faint
-  // transparent wireframes, projected through the same camera as the grids
-  // so they sit anchored in the 3D space and drift slowly through it.
+  // ---------- Grid-aligned wireframe bodies (Tetris-like) ----------
+  // Axis-aligned polycubes built ON the floor grid: every unit cube is exactly
+  // one grid cell, the body rests flat on the ground (base at y = 0) snapped to
+  // grid columns, and it RIDES the floor -- translating toward the viewer in Z
+  // at the floor's own scroll rate -- so it stays locked inside the moving
+  // grid. No rotation and no arbitrary scale: the edges stay rectangular and
+  // perspective-correct, projected through the same camera as the grids.
   const BODY_SHAPES = [
-    [[0,0,0],[1,0,0],[2,0,0],[3,0,0]],           // I
-    [[0,0,0],[1,0,0],[0,1,0],[1,1,0]],           // O
-    [[0,0,0],[1,0,0],[2,0,0],[1,1,0]],           // T
-    [[0,0,0],[0,1,0],[0,2,0],[1,0,0]],           // L
-    [[1,0,0],[2,0,0],[0,1,0],[1,1,0]],           // S
-    [[0,0,0],[1,0,0],[1,1,0],[1,0,1]],           // 3D corner
-    [[0,0,0],[1,0,0],[0,0,1],[1,0,1]],           // flat 2x2 in XZ
+    [[0,0,0],[1,0,0],[2,0,0],[3,0,0]],           // I (flat, along X)
+    [[0,0,0],[1,0,0],[0,1,0],[1,1,0]],           // O (upright square)
+    [[0,0,0],[1,0,0],[2,0,0],[1,1,0]],           // T (upright)
+    [[0,0,0],[0,1,0],[0,2,0],[1,0,0]],           // L (upright)
+    [[1,0,0],[2,0,0],[0,1,0],[1,1,0]],           // S (upright)
+    [[0,0,0],[1,0,0],[0,0,1],[1,0,1]],           // flat 2x2 slab in XZ
+    [[0,0,0],[1,0,0],[0,0,1],[1,0,1],[0,1,0],[1,1,0],[0,1,1],[1,1,1]], // 2x2x2 box
   ];
   const BODY_HUES = ["#ffffff", "#bfe8ff", "#ffd7f0", "#d8ffd8", "#fff0c8"];
   const CUBE_EDGES = [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]];
 
-  function spawnBody(b) {
+  // The floor the bodies ride on: the first (base) horizontal plane.
+  function baseFloor() {
+    return state.layers.find((l) => l.type === "hplane" && !l.exiting) || null;
+  }
+  function bodyCell() { const f = baseFloor(); return f && f.cellM > 0 ? f.cellM : 1; }
+
+  function spawnBody(b, near) {
     const shape = BODY_SHAPES[Math.floor(Math.random() * BODY_SHAPES.length)];
+    const cell = bodyCell();
     b = b || {};
     b.cubes = shape;
-    // centroid (of cube centres) so it rotates/positions about its middle
-    let sx = 0, sy = 0, sz = 0;
-    for (const c of shape) { sx += c[0] + 0.5; sy += c[1] + 0.5; sz += c[2] + 0.5; }
-    b.cx0 = sx / shape.length; b.cy0 = sy / shape.length; b.cz0 = sz / shape.length;
-    b.scale = rnd(0.6, 1.3);
-    b.pos = { x: rnd(-9, 9), y: rnd(0.5, 6), z: rnd(24, 44) };
-    b.vel = { x: rnd(-0.25, 0.25), y: rnd(-0.08, 0.08), z: rnd(-0.7, -0.22) }; // drift toward viewer
-    b.yaw = rnd(0, Math.PI * 2);
-    b.yawVel = rnd(-0.18, 0.18);
+    b.gx = Math.round(rnd(-8, 8));                       // integer grid column
+    // world depth, snapped to whole cells so the cube faces line up with the
+    // floor's cross lines; start far (or near, when riding "backwards").
+    const zc = near ? rnd(4, 10) : rnd(28, 46);
+    b.z = Math.round(zc / cell) * cell;
     b.color = BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)];
-    b.opacity = rnd(15, 30);   // faint / ghostly, but perceptible over grids
+    b.opacity = rnd(14, 26);   // faint / ghostly, but perceptible over grids
     b.lineWidth = rnd(1, 2);
     return b;
   }
@@ -1179,26 +1185,31 @@
     while (state.bodies.length < n) state.bodies.push(spawnBody());
     if (state.bodies.length > n) state.bodies.length = n;
   }
-  function updateBodies(dt) {
-    // real-time slow drift (independent of the very slow grid tempo)
+  function updateBodies(sdt) {
+    // Ride the floor: move in Z at the base floor's scroll rate and in the same
+    // (slow) grid tempo, so the bodies travel WITH the grid instead of drifting
+    // on their own. sdt already carries the Geschwindigkeit dial.
+    const f = baseFloor();
+    const flow = f ? (f.flowSpeed || 0) : 0;
     for (const b of state.bodies) {
-      b.pos.x += b.vel.x * dt;
-      b.pos.y += b.vel.y * dt;
-      b.pos.z += b.vel.z * dt;
-      b.yaw += b.yawVel * dt;
-      if (b.pos.z < 1.3 || b.pos.z > 55 || Math.abs(b.pos.x) > 17 || b.pos.y < -4 || b.pos.y > 14) {
-        spawnBody(b); // respawn far when it drifts out of view
-      }
+      b.z -= flow * sdt;
+      if (b.z < 1.5) spawnBody(b, false);      // passed the camera -> respawn far
+      else if (b.z > 52) spawnBody(b, true);   // (floor scrolling backwards) -> respawn near
     }
   }
   function drawBodies() {
+    const cell = bodyCell();
+    const f = baseFloor();
+    // Share the floor's lateral phase so the cube columns sit on the floor's
+    // depth lines even if the floor drifts sideways.
+    const phaseX = f ? mod(state.clock * (f.flowX || 0), cell) : 0;
     for (const b of state.bodies) {
       const segs = [];
       let ok = true;
       for (const cube of b.cubes) {
         const cs = [];
         for (let i = 0; i < 8; i += 1) {
-          const w = bodyCornerZ(b, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
+          const w = bodyCorner(b, cell, phaseX, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
           if (w.z < ZNEAR) { ok = false; break; }
           cs.push(w);
         }
@@ -1208,11 +1219,12 @@
       if (ok && segs.length) strokeSegs(segs, shiftHue(b.color, state.jam.hue), b.lineWidth, clamp01(b.opacity / 100));
     }
   }
-  // like bodyCorner but also returns world z for near-plane test
-  function bodyCornerZ(b, lx, ly, lz) {
-    const mx = (lx - b.cx0) * b.scale, my = (ly - b.cy0) * b.scale, mz = (lz - b.cz0) * b.scale;
-    const c = Math.cos(b.yaw), s = Math.sin(b.yaw);
-    const wx = b.pos.x + (mx * c - mz * s), wy = b.pos.y + my, wz = b.pos.z + (mx * s + mz * c);
+  // World position of one axis-aligned cube corner (no rotation): grid column
+  // gx, unit cube offset (lx,ly,lz), each unit = one floor cell, base on y = 0.
+  function bodyCorner(b, cell, phaseX, lx, ly, lz) {
+    const wx = (b.gx + lx) * cell - phaseX;
+    const wy = ly * cell;            // base rests on the floor (y = 0)
+    const wz = b.z + lz * cell;
     const p = project(wx, wy, wz);
     return { x: p.x, y: p.y, z: wz };
   }
