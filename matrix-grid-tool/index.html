@@ -1218,8 +1218,8 @@
     const zc = near === true ? rnd(4, 10) : near === false ? rnd(24, 42) : rnd(4, 42);
     b.z = Math.round(zc / cell) * cell;
     b.color = BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)];
-    b.opacity = rnd(18, 32);   // faint / ghostly, but perceptible over grids
-    b.lineWidth = rnd(1, 2);
+    b.opacity = rnd(42, 66);   // solid enough to read against the busy pastel scene
+    b.lineWidth = rnd(1.5, 2.5);
     return b;
   }
   function setBodyCount(n) {
@@ -1273,10 +1273,14 @@
         }
       }
       if (!ok || !segs.length) continue;
-      // faint filled faces first (back-to-front), then the wireframe on top
+      const a = clamp01(b.opacity / 100);
+      // faint filled faces first (back-to-front) ...
       faces.sort((u, v) => v.z - u.z);
-      fillQuads(faces.map((f) => f.q), col, clamp01(b.opacity / 100) * 0.5);
-      strokeSegs(segs, col, b.lineWidth, clamp01(b.opacity / 100));
+      fillQuads(faces.map((f) => f.q), col, a * 0.5);
+      // ... then a dark halo so the body reads on BRIGHT pastel scenes too ...
+      strokeSegs(segs, "#000000", b.lineWidth + 2, a * 0.6);
+      // ... then the bright edges on top.
+      strokeSegs(segs, col, b.lineWidth, Math.min(1, a * 1.3));
     }
   }
   // World position of one axis-aligned cube corner (no rotation): grid column
@@ -1994,16 +1998,20 @@
     const flow = state.clock * (layer.flowSpeed || 0); // px scroll
     const base = [], acc = [];
     if (layer.type === "parallel-h") {
-      const start = mod(layer.originY + flow, cell) - cell;
+      const origin = layer.originY + flow;
+      const scroll = Math.floor(origin / cell); // whole cells scrolled
+      const start = origin - scroll * cell - cell;
       let i = 0;
       for (let y = start; y <= state.height + cell; y += cell, i += 1) {
-        (N && mod(i + pA, N) === 0 ? acc : base).push([0, y + 0.5, state.width, y + 0.5]);
+        (N && mod(i - scroll + pA, N) === 0 ? acc : base).push([0, y + 0.5, state.width, y + 0.5]);
       }
     } else {
-      const start = mod(layer.originX + flow, cell) - cell;
+      const origin = layer.originX + flow;
+      const scroll = Math.floor(origin / cell);
+      const start = origin - scroll * cell - cell;
       let i = 0;
       for (let x = start; x <= state.width + cell; x += cell, i += 1) {
-        (N && mod(i + pA, N) === 0 ? acc : base).push([x + 0.5, 0, x + 0.5, state.height]);
+        (N && mod(i - scroll + pA, N) === 0 ? acc : base).push([x + 0.5, 0, x + 0.5, state.height]);
       }
     }
     strokeSegs(base, col, layer.lineWidth, alpha);
@@ -2019,8 +2027,16 @@
   // verteilt" asks for. The floor's screen offset from the horizon is
   // py - cy = fpx*(eye - e)/Z, i.e. proportional to 1/Z, so uniform steps in
   // 1/Z give uniform screen spacing.
-  function hplaneDepthRows(e, cell, ext, kMax, phaseZ) {
+  // Returns rows near->far as {Z, k}. Crucially, `k` is the CONTINUOUS world
+  // grid-line identity (loop slot + whole cells already scrolled), not the loop
+  // slot -- so an accent painted on line k stays on the same physical line as it
+  // scrolls, giving smooth, consistent colour-field motion instead of a jump
+  // back by one line every time the scroll phase wraps.
+  function hplaneDepthRows(e, cell, ext, kMax, flowSpeed) {
     const rows = [];
+    const P = cell > 0 ? (state.clock * flowSpeed) / cell : 0; // scroll, in cells
+    const scroll = Math.floor(P);
+    const ph = P - scroll;                                     // 0..1
     if (state.evenDepth) {
       const cam = state.camera;
       const fpx = (cam.focal / 36) * state.width;
@@ -2033,23 +2049,22 @@
         if (invNear > invFar) {
           const rowN = Math.max(1, kMax);
           const dInv = (invNear - invFar) / rowN;
-          const ph = cell > 0 ? phaseZ / cell : 0; // reuse the scroll as a 0..1 offset
-          for (let k = 0; k <= rowN; k += 1) {
+          // iterate near -> far (large k = large inv = small Z), no sort needed
+          for (let k = rowN; k >= 0; k -= 1) {
             const inv = invFar + dInv * (k + ph);
             if (inv <= 0) continue;
             const Z = 1 / inv;
             if (Z < ZNEAR || Z > ext) continue;
-            rows.push({ Z, k });
+            rows.push({ Z, k: k + scroll });
           }
-          rows.sort((a, b) => a.Z - b.Z); // near -> far, so lattice rows are adjacent
           return rows;
         }
       }
     }
     for (let k = 1; k <= kMax; k += 1) {
-      const Z = k * cell - phaseZ;
+      const Z = (k - ph) * cell; // = k*cell - phaseZ
       if (Z < ZNEAR || Z > ext) continue;
-      rows.push({ Z, k });
+      rows.push({ Z, k: k + scroll });
     }
     return rows;
   }
@@ -2066,21 +2081,24 @@
     const cellsMode = N && CELL_FILL_MODES.indexOf(layer.accentMode) !== -1;
     const base = [], acc = [], quads = [];
     const halfW = J * cell;
-    // Animation: scroll the grid in depth (phaseZ -> moving "game floor")
-    // and laterally in x (phaseX) so the plane drifts in both directions.
-    const phaseZ = mod(state.clock * (layer.flowSpeed || 0), cell);
-    const phaseX = mod(state.clock * (layer.flowX || 0), cell);
+    // Animation: scroll the grid in depth (moving "game floor") and laterally
+    // in x. phaseX is the sub-cell offset; scrollX is the whole cells already
+    // scrolled, added to the accent index so the coloured pattern stays painted
+    // on the same physical lines as they scroll (no jump when the phase wraps).
+    const Px = cell > 0 ? (state.clock * (layer.flowX || 0)) / cell : 0;
+    const scrollX = Math.floor(Px);
+    const phaseX = (Px - scrollX) * cell;
     const [jLo, jHi] = gJRange(J);   // vertical/depth line range
     const kMax = gKMax(K, 1);        // horizontal (cross) line cap
     // depth lines (run into Z at fixed X), scrolled laterally by phaseX
     for (let j = jLo; j <= jHi; j += 1) {
       const X = j * cell - phaseX;
       const p0 = project(X, e, ZNEAR), p1 = project(X, e, ext);
-      (linesMode && mod(j + pA, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
+      (linesMode && mod(j + scrollX + pA, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
-    // cross lines (run across X at fixed Z). Their depth positions come from
-    // hplaneDepthRows so they can be spaced evenly on screen (see helper).
-    const rowsD = hplaneDepthRows(e, cell, ext, kMax, phaseZ);
+    // cross lines (run across X at fixed Z). Their depth positions and their
+    // continuous accent identity come from hplaneDepthRows (see helper).
+    const rowsD = hplaneDepthRows(e, cell, ext, kMax, layer.flowSpeed || 0);
     for (const rw of rowsD) {
       const p0 = project(-halfW, e, rw.Z), p1 = project(halfW, e, rw.Z);
       (linesMode && mod(rw.k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
@@ -2101,7 +2119,7 @@
         for (let j = cjLo; j <= cjHi; j += 1) {
           const c = j - cjLo;
           for (let r = 0; r < cap - 1; r += 1) {
-            if (!accentHit(layer, N, j, rowsD[r].k, pA, pB)) continue;
+            if (!accentHit(layer, N, j + scrollX, rowsD[r].k, pA, pB)) continue;
             quads.push([NX[c][r], NX[c + 1][r], NX[c + 1][r + 1], NX[c][r + 1]]);
           }
         }
@@ -2124,24 +2142,28 @@
     const cellsMode = N && CELL_FILL_MODES.indexOf(layer.accentMode) !== -1;
     const base = [], acc = [], quads = [];
     const halfW = Jw * cell;
-    // Animation: scroll the wall grid vertically (phaseY) and laterally
-    // (phaseX) so it drifts in x and y.
-    const phaseY = mod(state.clock * (layer.flowSpeed || 0), cell);
-    const phaseX = mod(state.clock * (layer.flowX || 0), cell);
+    // Animation: scroll the wall grid vertically and laterally. phaseY/phaseX
+    // are the sub-cell offsets; scrollY/scrollX are the whole cells scrolled,
+    // added to the accent index so the coloured pattern stays on the same
+    // physical cells while scrolling (no jump when the phase wraps).
+    const Py = cell > 0 ? (state.clock * (layer.flowSpeed || 0)) / cell : 0;
+    const scrollY = Math.floor(Py); const phaseY = (Py - scrollY) * cell;
+    const Px = cell > 0 ? (state.clock * (layer.flowX || 0)) / cell : 0;
+    const scrollX = Math.floor(Px); const phaseX = (Px - scrollX) * cell;
     const [jLo, jHi] = gJRange(Jw);  // vertical line range
     const kMax = gKMax(Kw, 0);       // horizontal line cap
     // vertical lines (fixed X, Y from 0..H), scrolled laterally
     for (let j = jLo; j <= jHi; j += 1) {
       const X = j * cell - phaseX;
       const p0 = project(X, 0, d), p1 = project(X, H, d);
-      (linesMode && mod(j + pA, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
+      (linesMode && mod(j + scrollX + pA, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     // horizontal lines (fixed Y, X from -halfW..halfW), scrolled vertically
     for (let k = 0; k <= kMax; k += 1) {
       const Y = k * cell - phaseY;
       if (Y < 0 || Y > H) continue;
       const p0 = project(-halfW, Y, d), p1 = project(halfW, Y, d);
-      (linesMode && mod(k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
+      (linesMode && mod(k + scrollY + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
     if (cellsMode) {
       const cjLo = Math.max(jLo, -CELL_CAP), cjHi = Math.min(jHi, CELL_CAP);
@@ -2157,7 +2179,7 @@
         for (let j = cjLo; j <= cjHi; j += 1) {
           const c = j - cjLo;
           for (let k = 0; k <= ckMax; k += 1) {
-            if (!accentHit(layer, N, j, k, pA, pB)) continue;
+            if (!accentHit(layer, N, j + scrollX, k + scrollY, pA, pB)) continue;
             const Y0 = k * cell - phaseY;
             if (Y0 < 0 || Y0 > H) continue;
             quads.push([NX[c][k], NX[c + 1][k], NX[c + 1][k + 1], NX[c][k + 1]]);

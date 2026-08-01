@@ -28,11 +28,12 @@ dials you scrub for instant, chaotic results:
   ones don't just vanish — they physically **fly out** (planes rise up and
   fade, walls recede into depth), demoscene-style.
 - **Farbe** — rotates the hue of the whole palette.
-- **Körper** — number of faint, ghostly Tetris-like solids. They are **genuine
-  3D**, **axis-aligned** polycubes from a varied catalogue (boxes, towers,
-  bricks, extruded L/T/S, U-frames, crosses, staircases…) in **mixed sizes**
-  (whole-cell steps), rendered as wireframes with **very lightly filled faces**
-  so they read as solid but stay ghostly. Each body is **anchored to a
+- **Körper** — number of ghostly Tetris-like solids. They are **genuine 3D**,
+  **axis-aligned** polycubes from a varied catalogue (boxes, towers, bricks,
+  extruded L/T/S, U-frames, crosses, staircases…) in **mixed sizes** (whole-cell
+  steps), rendered as wireframes with **lightly filled faces** so they read as
+  solid. A subtle dark outline keeps them clearly visible even over bright,
+  busy grid scenes. Each body is **anchored to a
   horizontal plane** (mostly the lower/foreground ones): it sits on its plane
   and rides up and down with it, so the **same gravity/spring physics that
   moves the planes moves the bodies** — kick the stack and they bounce along.
