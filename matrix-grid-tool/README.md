@@ -28,11 +28,12 @@ dials you scrub for instant, chaotic results:
   fade, walls recede into depth), demoscene-style.
 - **Farbe** — rotates the hue of the whole palette.
 - **Körper** — number of faint, ghostly Tetris-like wireframe solids. They
-  are **axis-aligned** boxes built on the floor grid (each unit cube = one
-  grid cell), sit flat on the ground snapped to the grid, and **ride the
-  floor** — travelling toward the viewer at the floor's own scroll rate — so
-  they stay locked in the moving grid. No tumbling; perspective-correct
-  (0 = none).
+  are **axis-aligned** boxes (each unit cube = one grid cell), **anchored to
+  the horizontal planes**: a body sits on its plane and rides up and down with
+  it, so the **same gravity/spring physics that moves the planes moves the
+  bodies** — kick the stack and they bounce along. They stay snapped to the
+  grid and ride the plane's scroll toward the viewer. No tumbling, no arbitrary
+  scale; perspective-correct (0 = none).
 - **Hintergrund** — the background colour: a slider (0 = black, up = a
   dark tinted hue), a colour picker, and a 🎲 button that randomises just
   the background. Default is a dark tint (not black). The 🎨 palette

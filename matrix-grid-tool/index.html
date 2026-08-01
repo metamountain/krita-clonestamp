@@ -1159,20 +1159,27 @@
   const BODY_HUES = ["#ffffff", "#bfe8ff", "#ffd7f0", "#d8ffd8", "#fff0c8"];
   const CUBE_EDGES = [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]];
 
-  // The floor the bodies ride on: the first (base) horizontal plane.
-  function baseFloor() {
-    return state.layers.find((l) => l.type === "hplane" && !l.exiting) || null;
+  // The horizontal planes bodies can be anchored to (the moving stack).
+  function bodyPlanes() {
+    return state.layers.filter((l) => l.type === "hplane" && !l.exiting);
   }
-  function bodyCell() { const f = baseFloor(); return f && f.cellM > 0 ? f.cellM : 1; }
+  // Each body is nailed to ONE plane (by its stable slot). It inherits that
+  // plane's elevation -- so as the plane bobs under gravity / the spring stack,
+  // the body rides up and down WITH it -- and that plane's cell size and scroll.
+  function bodyPlane(b) {
+    const ps = bodyPlanes();
+    return ps.length ? ps[b.slot % ps.length] : null;
+  }
+  function bodyCellOf(p) { return p && p.cellM > 0 ? p.cellM : 1; }
 
   function spawnBody(b, near) {
-    const shape = BODY_SHAPES[Math.floor(Math.random() * BODY_SHAPES.length)];
-    const cell = bodyCell();
     b = b || {};
-    b.cubes = shape;
-    b.gx = Math.round(rnd(-8, 8));                       // integer grid column
+    b.slot = Math.floor(Math.random() * 9973);           // stable anchor plane pick
+    b.cubes = BODY_SHAPES[Math.floor(Math.random() * BODY_SHAPES.length)];
+    const cell = bodyCellOf(bodyPlane(b));
+    b.gx = Math.round(rnd(-8, 8));                        // integer grid column
     // world depth, snapped to whole cells so the cube faces line up with the
-    // floor's cross lines; start far (or near, when riding "backwards").
+    // plane's cross lines; start far (or near, when riding "backwards").
     const zc = near ? rnd(4, 10) : rnd(28, 46);
     b.z = Math.round(zc / cell) * cell;
     b.color = BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)];
@@ -1186,30 +1193,31 @@
     if (state.bodies.length > n) state.bodies.length = n;
   }
   function updateBodies(sdt) {
-    // Ride the floor: move in Z at the base floor's scroll rate and in the same
-    // (slow) grid tempo, so the bodies travel WITH the grid instead of drifting
-    // on their own. sdt already carries the Geschwindigkeit dial.
-    const f = baseFloor();
-    const flow = f ? (f.flowSpeed || 0) : 0;
+    // Ride the anchored plane's scroll in Z at the grid tempo (sdt carries the
+    // Geschwindigkeit dial), so bodies travel WITH the grid. Their vertical
+    // motion comes for free from the plane's elevation (physics), read live in
+    // drawBodies -- gravity acts on the bodies exactly as it does on the planes.
     for (const b of state.bodies) {
+      const p = bodyPlane(b);
+      const flow = p ? (p.flowSpeed || 0) : 0;
       b.z -= flow * sdt;
       if (b.z < 1.5) spawnBody(b, false);      // passed the camera -> respawn far
-      else if (b.z > 52) spawnBody(b, true);   // (floor scrolling backwards) -> respawn near
+      else if (b.z > 52) spawnBody(b, true);   // (scrolling backwards) -> respawn near
     }
   }
   function drawBodies() {
-    const cell = bodyCell();
-    const f = baseFloor();
-    // Share the floor's lateral phase so the cube columns sit on the floor's
-    // depth lines even if the floor drifts sideways.
-    const phaseX = f ? mod(state.clock * (f.flowX || 0), cell) : 0;
     for (const b of state.bodies) {
+      const p = bodyPlane(b);
+      const cell = bodyCellOf(p);
+      const baseY = p ? p.elevation : 0;   // sit ON the (moving) plane
+      // share the plane's lateral phase so the cube columns stay on its depth lines
+      const phaseX = p ? mod(state.clock * (p.flowX || 0), cell) : 0;
       const segs = [];
       let ok = true;
       for (const cube of b.cubes) {
         const cs = [];
         for (let i = 0; i < 8; i += 1) {
-          const w = bodyCorner(b, cell, phaseX, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
+          const w = bodyCorner(b, cell, phaseX, baseY, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
           if (w.z < ZNEAR) { ok = false; break; }
           cs.push(w);
         }
@@ -1220,10 +1228,11 @@
     }
   }
   // World position of one axis-aligned cube corner (no rotation): grid column
-  // gx, unit cube offset (lx,ly,lz), each unit = one floor cell, base on y = 0.
-  function bodyCorner(b, cell, phaseX, lx, ly, lz) {
+  // gx, unit cube offset (lx,ly,lz), each unit = one plane cell, base sitting on
+  // the anchored plane (baseY = its current elevation).
+  function bodyCorner(b, cell, phaseX, baseY, lx, ly, lz) {
     const wx = (b.gx + lx) * cell - phaseX;
-    const wy = ly * cell;            // base rests on the floor (y = 0)
+    const wy = baseY + ly * cell;
     const wz = b.z + lz * cell;
     const p = project(wx, wy, wz);
     return { x: p.x, y: p.y, z: wz };
