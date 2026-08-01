@@ -27,6 +27,9 @@ dials you scrub for instant, chaotic results:
   ones don't just vanish — they physically **fly out** (planes rise up and
   fade, walls recede into depth), demoscene-style.
 - **Farbe** — rotates the hue of the whole palette.
+- **Körper** — number of faint, ghostly Tetris-like wireframe solids that
+  drift slowly through the grid space, anchored in the same 3D camera
+  (0 = none).
 - **Hintergrund** — the background colour: a slider (0 = black, up = a
   dark tinted hue), a colour picker, and a 🎲 button that randomises just
   the background. Default is a dark tint (not black). The 🎨 palette

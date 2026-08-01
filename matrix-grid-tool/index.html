@@ -416,6 +416,11 @@
         <span id="jamVCountVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">0</span>
       </div>
       <div class="row">
+        <label>Körper</label>
+        <input type="range" id="jamBodies" min="0" max="14" step="1" value="4">
+        <span id="jamBodiesVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">4</span>
+      </div>
+      <div class="row">
         <label>Farbe</label>
         <input type="range" id="jamHue" min="0" max="360" step="1" value="0">
         <span id="jamHueVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">0°</span>
@@ -724,6 +729,7 @@
     // optional cap on the number of grid lines per plane (0 = that
     // direction off). h = horizontal lines, v = vertical/depth lines.
     gridLimit: { on: false, h: 10, v: 10 },
+    bodies: [], // faint ghostly Tetris-like wireframe solids drifting through
     clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).
     layers: makeStack(10),
@@ -828,6 +834,8 @@
   const jamVCountVal = document.getElementById("jamVCountVal");
   const jamHueInput = document.getElementById("jamHue");
   const jamHueVal = document.getElementById("jamHueVal");
+  const jamBodiesInput = document.getElementById("jamBodies");
+  const jamBodiesVal = document.getElementById("jamBodiesVal");
   const fieldsModeSelect = document.getElementById("fieldsMode");
   const bgSliderInput = document.getElementById("bgSlider");
   const bgPick = document.getElementById("bgPick");
@@ -874,6 +882,11 @@
     render();
   });
   bgRnd.addEventListener("click", randomBg);
+  jamBodiesInput.addEventListener("input", () => {
+    jamBodiesVal.textContent = jamBodiesInput.value;
+    setBodyCount(Number(jamBodiesInput.value));
+    if (!state.anim.playing) render();
+  });
 
   // ---------- Jam (808) controls ----------
   // H-/V-Ebenen dials spawn or remove layers of a type live; Farbe rotates
@@ -1047,6 +1060,7 @@
     const sdt = dt * state.anim.speed;
     state.clock += sdt; // grid flow follows the (slow) Geschwindigkeit dial
     updateExits(dt);    // fly-out animation runs at real time (not slowed)
+    updateBodies(dt);   // ghostly bodies drift slowly in real time
     if (state.physics.enabled) {
       // Physics runs at a lively rate, largely DECOUPLED from the very slow
       // grid-flow speed -- otherwise it only steps every ~10 frames at low
@@ -1109,6 +1123,83 @@
     if (active && active.type === "hplane" && editorTitleEl) {
       editorTitleEl.textContent = layerShortLabel(active);
     }
+  }
+
+  // ---------- Ghostly Tetris-like wireframe bodies ----------
+  // Simple polycube shapes (integer unit-cube offsets). Rendered as faint
+  // transparent wireframes, projected through the same camera as the grids
+  // so they sit anchored in the 3D space and drift slowly through it.
+  const BODY_SHAPES = [
+    [[0,0,0],[1,0,0],[2,0,0],[3,0,0]],           // I
+    [[0,0,0],[1,0,0],[0,1,0],[1,1,0]],           // O
+    [[0,0,0],[1,0,0],[2,0,0],[1,1,0]],           // T
+    [[0,0,0],[0,1,0],[0,2,0],[1,0,0]],           // L
+    [[1,0,0],[2,0,0],[0,1,0],[1,1,0]],           // S
+    [[0,0,0],[1,0,0],[1,1,0],[1,0,1]],           // 3D corner
+    [[0,0,0],[1,0,0],[0,0,1],[1,0,1]],           // flat 2x2 in XZ
+  ];
+  const BODY_HUES = ["#ffffff", "#bfe8ff", "#ffd7f0", "#d8ffd8", "#fff0c8"];
+  const CUBE_EDGES = [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]];
+
+  function spawnBody(b) {
+    const shape = BODY_SHAPES[Math.floor(Math.random() * BODY_SHAPES.length)];
+    b = b || {};
+    b.cubes = shape;
+    // centroid (of cube centres) so it rotates/positions about its middle
+    let sx = 0, sy = 0, sz = 0;
+    for (const c of shape) { sx += c[0] + 0.5; sy += c[1] + 0.5; sz += c[2] + 0.5; }
+    b.cx0 = sx / shape.length; b.cy0 = sy / shape.length; b.cz0 = sz / shape.length;
+    b.scale = rnd(0.6, 1.3);
+    b.pos = { x: rnd(-9, 9), y: rnd(0.5, 6), z: rnd(24, 44) };
+    b.vel = { x: rnd(-0.25, 0.25), y: rnd(-0.08, 0.08), z: rnd(-0.7, -0.22) }; // drift toward viewer
+    b.yaw = rnd(0, Math.PI * 2);
+    b.yawVel = rnd(-0.18, 0.18);
+    b.color = BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)];
+    b.opacity = rnd(15, 30);   // faint / ghostly, but perceptible over grids
+    b.lineWidth = rnd(1, 2);
+    return b;
+  }
+  function setBodyCount(n) {
+    n = Math.max(0, Math.round(n));
+    while (state.bodies.length < n) state.bodies.push(spawnBody());
+    if (state.bodies.length > n) state.bodies.length = n;
+  }
+  function updateBodies(dt) {
+    // real-time slow drift (independent of the very slow grid tempo)
+    for (const b of state.bodies) {
+      b.pos.x += b.vel.x * dt;
+      b.pos.y += b.vel.y * dt;
+      b.pos.z += b.vel.z * dt;
+      b.yaw += b.yawVel * dt;
+      if (b.pos.z < 1.3 || b.pos.z > 55 || Math.abs(b.pos.x) > 17 || b.pos.y < -4 || b.pos.y > 14) {
+        spawnBody(b); // respawn far when it drifts out of view
+      }
+    }
+  }
+  function drawBodies() {
+    for (const b of state.bodies) {
+      const segs = [];
+      let ok = true;
+      for (const cube of b.cubes) {
+        const cs = [];
+        for (let i = 0; i < 8; i += 1) {
+          const w = bodyCornerZ(b, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
+          if (w.z < ZNEAR) { ok = false; break; }
+          cs.push(w);
+        }
+        if (!ok) break;
+        for (const e of CUBE_EDGES) segs.push([cs[e[0]].x, cs[e[0]].y, cs[e[1]].x, cs[e[1]].y]);
+      }
+      if (ok && segs.length) strokeSegs(segs, shiftHue(b.color, state.jam.hue), b.lineWidth, clamp01(b.opacity / 100));
+    }
+  }
+  // like bodyCorner but also returns world z for near-plane test
+  function bodyCornerZ(b, lx, ly, lz) {
+    const mx = (lx - b.cx0) * b.scale, my = (ly - b.cy0) * b.scale, mz = (lz - b.cz0) * b.scale;
+    const c = Math.cos(b.yaw), s = Math.sin(b.yaw);
+    const wx = b.pos.x + (mx * c - mz * s), wy = b.pos.y + my, wz = b.pos.z + (mx * s + mz * c);
+    const p = project(wx, wy, wz);
+    return { x: p.x, y: p.y, z: wz };
   }
   function playAnim() {
     if (state.anim.playing) return;
@@ -1961,6 +2052,7 @@
     for (let i = state.layers.length - 1; i >= 0; i -= 1) {
       drawLayer(state.layers[i]);
     }
+    drawBodies(); // faint ghostly solids on top of the grids
     if (state.camera.showHorizon) {
       ctx.save();
       ctx.globalAlpha = 0.5;
@@ -2061,6 +2153,7 @@
 
   // ---------- Init ----------
   randomBg(); // start on a random (non-black, not-always-blue) background
+  setBodyCount(Number(jamBodiesInput.value)); // ghostly bodies
   syncCameraInputs();
   animSpeedVal.textContent = state.anim.speed.toFixed(3);
   syncResolutionInputs();
