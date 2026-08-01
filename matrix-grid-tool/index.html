@@ -571,6 +571,14 @@
       </div>
       <div class="hint">Begrenzt die Anzahl der Gitterlinien je Ebene. 0 = diese Richtung aus (z.B. horizontal 10, vertikal 0 = nur Querlinien).</div>
     </div>
+    <div class="subpanel">
+      <h3>Tiefe</h3>
+      <div class="row">
+        <label>Gleichmäßig verteilt</label>
+        <input type="checkbox" id="evenDepth" checked>
+      </div>
+      <div class="hint">Verteilt die Quer-/Tiefenlinien gleichmäßig über das Bild (gleiche Dichte oben wie unten), statt sie am Horizont zu verdichten.</div>
+    </div>
   </div>
 </div>
 
@@ -729,6 +737,10 @@
     // optional cap on the number of grid lines per plane (0 = that
     // direction off). h = horizontal lines, v = vertical/depth lines.
     gridLimit: { on: false, h: 10, v: 10 },
+    // evenDepth: space the floor's depth lines evenly ON SCREEN (uniform in
+    // inverse depth) instead of uniform in world Z -> same density top &
+    // bottom, no bunching at the horizon.
+    evenDepth: true,
     bodies: [], // faint ghostly Tetris-like wireframe solids drifting through
     clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).
@@ -850,6 +862,9 @@
 
   // ---------- Grid line-count limit ----------
   gridLimitOn.addEventListener("change", () => { state.gridLimit.on = gridLimitOn.checked; render(); });
+  document.getElementById("evenDepth").addEventListener("change", (e) => {
+    state.evenDepth = e.target.checked; render();
+  });
   gridLimitH.addEventListener("change", () => {
     state.gridLimit.h = Math.max(0, Math.round(Number(gridLimitH.value) || 0)); render();
   });
@@ -1922,6 +1937,50 @@
     if (N) strokeSegs(acc, acol, layer.lineWidth, aA);
   }
 
+  // Depth positions of a horizontal plane's cross lines, returned near->far
+  // as {Z, k} (k = the accent index). By default the floor is uniform in
+  // world Z, which makes the lines bunch up densely toward the horizon. When
+  // state.evenDepth is on we instead space the rows uniformly in inverse
+  // depth (1/Z) so they land at even intervals ON SCREEN -- as many rows near
+  // the bottom as near the top -- which is what "räumlich gleichmäßig
+  // verteilt" asks for. The floor's screen offset from the horizon is
+  // py - cy = fpx*(eye - e)/Z, i.e. proportional to 1/Z, so uniform steps in
+  // 1/Z give uniform screen spacing.
+  function hplaneDepthRows(e, cell, ext, kMax, phaseZ) {
+    const rows = [];
+    if (state.evenDepth) {
+      const cam = state.camera;
+      const fpx = (cam.focal / 36) * state.width;
+      const A = fpx * (cam.eye - e); // > 0 when the plane sits below eye level
+      if (A > 1e-3) {
+        // Znear = depth where the plane meets the bottom image edge (the
+        // nearest row that can still be on screen); Zfar = the plane extent.
+        const Zbottom = Math.max(ZNEAR, A / (state.height * 0.5));
+        const invNear = 1 / Zbottom, invFar = 1 / ext;
+        if (invNear > invFar) {
+          const rowN = Math.max(1, kMax);
+          const dInv = (invNear - invFar) / rowN;
+          const ph = cell > 0 ? phaseZ / cell : 0; // reuse the scroll as a 0..1 offset
+          for (let k = 0; k <= rowN; k += 1) {
+            const inv = invFar + dInv * (k + ph);
+            if (inv <= 0) continue;
+            const Z = 1 / inv;
+            if (Z < ZNEAR || Z > ext) continue;
+            rows.push({ Z, k });
+          }
+          rows.sort((a, b) => a.Z - b.Z); // near -> far, so lattice rows are adjacent
+          return rows;
+        }
+      }
+    }
+    for (let k = 1; k <= kMax; k += 1) {
+      const Z = k * cell - phaseZ;
+      if (Z < ZNEAR || Z > ext) continue;
+      rows.push({ Z, k });
+    }
+    return rows;
+  }
+
   function drawHPlane(layer, alpha, col, acol, aA) {
     const cell = layer.cellM;
     if (cell <= 0) return;
@@ -1946,34 +2005,31 @@
       const p0 = project(X, e, ZNEAR), p1 = project(X, e, ext);
       (linesMode && mod(j + pA, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
-    // cross lines (run across X at fixed Z), scrolled in depth by phaseZ
-    for (let k = 1; k <= kMax; k += 1) {
-      const Z = k * cell - phaseZ;
-      if (Z < ZNEAR || Z > ext) continue;
-      const p0 = project(-halfW, e, Z), p1 = project(halfW, e, Z);
-      (linesMode && mod(k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
+    // cross lines (run across X at fixed Z). Their depth positions come from
+    // hplaneDepthRows so they can be spaced evenly on screen (see helper).
+    const rowsD = hplaneDepthRows(e, cell, ext, kMax, phaseZ);
+    for (const rw of rowsD) {
+      const p0 = project(-halfW, e, rw.Z), p1 = project(halfW, e, rw.Z);
+      (linesMode && mod(rw.k + pB, N) === 0 ? acc : base).push([p0.x, p0.y, p1.x, p1.y]);
     }
-    if (cellsMode) {
+    if (cellsMode && rowsD.length >= 2) {
       const cjLo = Math.max(jLo, -CELL_CAP), cjHi = Math.min(jHi, CELL_CAP);
-      const ckMax = Math.min(kMax, CELL_CAP);
-      const cols = cjHi - cjLo + 2, rows = ckMax + 1;
-      if (cols >= 2 && rows >= 2) {
+      const cap = Math.min(rowsD.length, CELL_CAP + 1); // depth rows to fill
+      const cols = cjHi - cjLo + 2;
+      if (cols >= 2 && cap >= 2) {
         // Project the grid nodes ONCE and reuse them for every cell's corners
         // (adjacent cells share nodes) -- ~4x fewer projections, much smoother.
         const NX = [];
         for (let c = 0; c < cols; c += 1) {
           const X = (cjLo + c) * cell - phaseX;
           const colArr = NX[c] = [];
-          for (let r = 0; r < rows; r += 1) colArr[r] = proj2(X, e, (1 + r) * cell - phaseZ);
+          for (let r = 0; r < cap; r += 1) colArr[r] = proj2(X, e, rowsD[r].Z);
         }
         for (let j = cjLo; j <= cjHi; j += 1) {
           const c = j - cjLo;
-          for (let k = 1; k <= ckMax; k += 1) {
-            if (!accentHit(layer, N, j, k, pA, pB)) continue;
-            const Z0 = k * cell - phaseZ;
-            if (Z0 < ZNEAR || Z0 > ext) continue;
-            const r0 = k - 1;
-            quads.push([NX[c][r0], NX[c + 1][r0], NX[c + 1][r0 + 1], NX[c][r0 + 1]]);
+          for (let r = 0; r < cap - 1; r += 1) {
+            if (!accentHit(layer, N, j, rowsD[r].k, pA, pB)) continue;
+            quads.push([NX[c][r], NX[c + 1][r], NX[c + 1][r + 1], NX[c][r + 1]]);
           }
         }
       }
