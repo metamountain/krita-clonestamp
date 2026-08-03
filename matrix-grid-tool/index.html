@@ -1215,14 +1215,13 @@
     b.planeRef = null;                                   // re-pick a fresh anchor on (re)spawn
     b.cubes = BODY_SHAPES[Math.floor(Math.random() * BODY_SHAPES.length)];
     b.unit = pick([1, 1, 1, 2, 2, 3]);                   // size in whole cells (mostly small)
-    const cell = bodyCellOf(bodyPlane(b)) * b.unit;
     b.gx = Math.round(rnd(-8, 8));                        // integer grid column
-    // world depth, snapped to a whole (scaled) cell so the cube faces line up
-    // with the plane's cross lines. Respawn far (or near when riding backwards);
-    // the INITIAL population (near === undefined) spreads across the whole field
-    // so there is always a chunky body up close, not just a distant cluster.
-    const zc = near === true ? rnd(4, 10) : near === false ? rnd(24, 42) : rnd(4, 42);
-    b.z = Math.round(zc / cell) * cell;
+    // Depth as a normalised far(0)->near(1) parameter, mapped to a world Z each
+    // frame through the SAME formula the plane's floor uses (even or uniform), so
+    // the body rides the grid on screen exactly like a floor row -- no sliding
+    // across rows. Respawn far (or near when riding backwards); the INITIAL
+    // population (near === undefined) spreads across the whole field.
+    b.df = near === true ? 0.92 : near === false ? 0.05 : Math.random();
     b.color = BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)];
     b.opacity = rnd(42, 66);   // solid enough to read against the busy pastel scene
     b.lineWidth = rnd(1.5, 2.5);
@@ -1233,17 +1232,40 @@
     while (state.bodies.length < n) state.bodies.push(spawnBody());
     if (state.bodies.length > n) state.bodies.length = n;
   }
+  // World Z of the body's base for its normalised depth b.df (0 = far extent,
+  // 1 = near/bottom edge), mapped through the anchored plane's floor formula so
+  // the body sits on the grid exactly like a floor row -- in even-depth mode too.
+  function bodyBaseZ(b, p) {
+    const ext = p ? p.extentM : 40, e = p ? p.elevation : 0;
+    const df = clamp01(b.df != null ? b.df : 0.5);
+    const ev = hplaneEven(e, ext);
+    if (state.evenDepth && ev) return 1 / (ev.invFar + (ev.invNear - ev.invFar) * df);
+    const near = ev ? ev.Zbottom : Math.max(ZNEAR, ext * 0.05);
+    return ext - df * (ext - near); // uniform: linear in world Z
+  }
+  // Rate at which df advances so the body's ON-SCREEN speed matches the floor's
+  // scroll (even or uniform), keeping body and grid locked together.
+  function bodyRate(b, p) {
+    const ext = p ? p.extentM : 40, e = p ? p.elevation : 0;
+    const cell = bodyCellOf(p), flow = p ? (p.flowSpeed || 0) : 0;
+    const ev = hplaneEven(e, ext);
+    if (state.evenDepth && ev) {
+      const rowN = Math.max(1, Math.floor(ext / cell));
+      return flow / (cell * rowN);
+    }
+    const near = ev ? ev.Zbottom : Math.max(ZNEAR, ext * 0.05);
+    return flow / Math.max(0.001, ext - near);
+  }
   function updateBodies(sdt) {
-    // Ride the anchored plane's scroll in Z at the grid tempo (sdt carries the
-    // Geschwindigkeit dial), so bodies travel WITH the grid. Their vertical
+    // Advance each body's normalised depth at the grid tempo (sdt carries the
+    // Geschwindigkeit dial) so it travels WITH the grid on screen. Vertical
     // motion comes for free from the plane's elevation (physics), read live in
     // drawBodies -- gravity acts on the bodies exactly as it does on the planes.
     for (const b of state.bodies) {
       const p = bodyPlane(b);
-      const flow = p ? (p.flowSpeed || 0) : 0;
-      b.z -= flow * sdt;
-      if (b.z < 1.5) spawnBody(b, false);      // passed the camera -> respawn far
-      else if (b.z > 52) spawnBody(b, true);   // (scrolling backwards) -> respawn near
+      b.df = (b.df != null ? b.df : 0.5) + bodyRate(b, p) * sdt;
+      if (b.df > 1.02) spawnBody(b, false);      // passed the camera -> respawn far
+      else if (b.df < -0.02) spawnBody(b, true); // (scrolling backwards) -> respawn near
     }
   }
   function drawBodies() {
@@ -1251,11 +1273,12 @@
       const p = bodyPlane(b);
       const cell = bodyCellOf(p) * (b.unit || 1); // each cube spans `unit` cells
       const baseY = p ? p.elevation : 0;   // sit ON the (moving) plane
+      const baseZ = bodyBaseZ(b, p);       // depth via the plane's own floor mapping
       // NOTE: the body keeps a FIXED world x (= gx*cell). We deliberately do not
       // apply the plane's lateral scroll here -- a sawtooth phase would make the
       // body hop sideways by a cell each wrap ("zucken"), and a continuous drift
-      // would slide it off to the side. It rides only in Z (toward the viewer)
-      // and Y (the plane's elevation).
+      // would slide it off to the side. It rides only in depth and in Y (the
+      // plane's elevation).
       const col = shiftHue(b.color, state.jam.hue);
       const cubeSet = new Set(b.cubes.map((c) => c[0] + "," + c[1] + "," + c[2]));
       const segs = [], faces = [];
@@ -1264,7 +1287,7 @@
         // 8 projected corners of this cube (corner bits: x=1, y=2, z=4)
         const cs = [];
         for (let i = 0; i < 8; i += 1) {
-          const w = bodyCorner(b, cell, baseY, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
+          const w = bodyCorner(b, cell, baseY, baseZ, cube[0] + (i & 1), cube[1] + ((i >> 1) & 1), cube[2] + ((i >> 2) & 1));
           if (w.z < ZNEAR) { ok = false; break; }
           cs.push(w);
         }
@@ -1293,10 +1316,10 @@
   // World position of one axis-aligned cube corner (no rotation): grid column
   // gx, cube offset (lx,ly,lz), each step = one `cell` (already unit-scaled),
   // base sitting on the anchored plane (baseY = its current elevation).
-  function bodyCorner(b, cell, baseY, lx, ly, lz) {
+  function bodyCorner(b, cell, baseY, baseZ, lx, ly, lz) {
     const wx = (b.gx + lx) * cell;
     const wy = baseY + ly * cell;
-    const wz = b.z + lz * cell;
+    const wz = baseZ + lz * cell;
     const p = project(wx, wy, wz);
     return { x: p.x, y: p.y, z: wz };
   }
@@ -2039,33 +2062,40 @@
   // slot -- so an accent painted on line k stays on the same physical line as it
   // scrolls, giving smooth, consistent colour-field motion instead of a jump
   // back by one line every time the scroll phase wraps.
+  // Shared even-depth parameters for a horizontal plane (null when the plane is
+  // at/above eye level, where the inverse-depth mapping doesn't apply). invFar
+  // corresponds to the far extent, invNear to the bottom image edge. Both the
+  // floor rows AND the bodies riding the plane map depth through THIS, so they
+  // stay glued to each other on screen.
+  function hplaneEven(e, ext) {
+    const cam = state.camera;
+    const fpx = (cam.focal / 36) * state.width;
+    const A = fpx * (cam.eye - e); // > 0 when the plane sits below eye level
+    if (A <= 1e-3) return null;
+    const Zbottom = Math.max(ZNEAR, A / (state.height * 0.5));
+    const invNear = 1 / Zbottom, invFar = 1 / ext;
+    if (!(invNear > invFar)) return null;
+    return { invFar, invNear, Zbottom };
+  }
   function hplaneDepthRows(e, cell, ext, kMax, flowSpeed) {
     const rows = [];
     const P = cell > 0 ? (state.clock * flowSpeed) / cell : 0; // scroll, in cells
     const scroll = Math.floor(P);
     const ph = P - scroll;                                     // 0..1
     if (state.evenDepth) {
-      const cam = state.camera;
-      const fpx = (cam.focal / 36) * state.width;
-      const A = fpx * (cam.eye - e); // > 0 when the plane sits below eye level
-      if (A > 1e-3) {
-        // Znear = depth where the plane meets the bottom image edge (the
-        // nearest row that can still be on screen); Zfar = the plane extent.
-        const Zbottom = Math.max(ZNEAR, A / (state.height * 0.5));
-        const invNear = 1 / Zbottom, invFar = 1 / ext;
-        if (invNear > invFar) {
-          const rowN = Math.max(1, kMax);
-          const dInv = (invNear - invFar) / rowN;
-          // iterate near -> far (large k = large inv = small Z), no sort needed
-          for (let k = rowN; k >= 0; k -= 1) {
-            const inv = invFar + dInv * (k + ph);
-            if (inv <= 0) continue;
-            const Z = 1 / inv;
-            if (Z < ZNEAR || Z > ext) continue;
-            rows.push({ Z, k: k + scroll });
-          }
-          return rows;
+      const ev = hplaneEven(e, ext);
+      if (ev) {
+        const rowN = Math.max(1, kMax);
+        const dInv = (ev.invNear - ev.invFar) / rowN;
+        // iterate near -> far (large k = large inv = small Z), no sort needed
+        for (let k = rowN; k >= 0; k -= 1) {
+          const inv = ev.invFar + dInv * (k + ph);
+          if (inv <= 0) continue;
+          const Z = 1 / inv;
+          if (Z < ZNEAR || Z > ext) continue;
+          rows.push({ Z, k: k + scroll });
         }
+        return rows;
       }
     }
     for (let k = 1; k <= kMax; k += 1) {
