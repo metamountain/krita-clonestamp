@@ -1320,9 +1320,26 @@
       }
       if (!ok || !segs.length) continue;
       const a = clamp01(b.opacity / 100);
-      // filled faces first (back-to-front), scaled by the Körper-Flächen dial ...
+      // filled faces first (back-to-front). The Körper-Flächen dial IS the face
+      // opacity directly: 0 = wireframe only, 100 = fully solid faces. Each face
+      // is filled SEPARATELY -- combining them in one path makes a cube's front
+      // and back faces cancel out under the winding rule and the box looks empty.
       faces.sort((u, v) => v.z - u.z);
-      fillQuads(faces.map((f) => f.q), col, a * clamp01(state.bodyFill / 100));
+      const fillA = clamp01(state.bodyFill / 100);
+      if (fillA > 0) {
+        ctx.save();
+        ctx.globalAlpha = fillA;
+        ctx.fillStyle = col;
+        for (const f of faces) {
+          const q = f.q;
+          ctx.beginPath();
+          ctx.moveTo(q[0][0], q[0][1]);
+          for (let i = 1; i < q.length; i += 1) ctx.lineTo(q[i][0], q[i][1]);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.restore();
+      }
       // ... then a dark halo so the body reads on BRIGHT pastel scenes too ...
       strokeSegs(segs, "#000000", b.lineWidth + 2, a * 0.6);
       // ... then the bright edges on top.
