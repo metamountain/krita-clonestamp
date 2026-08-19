@@ -575,9 +575,9 @@
       <h3>Tiefe</h3>
       <div class="row">
         <label>Gleichmäßig verteilt</label>
-        <input type="checkbox" id="evenDepth" checked>
+        <input type="checkbox" id="evenDepth">
       </div>
-      <div class="hint">Verteilt die Quer-/Tiefenlinien gleichmäßig über das Bild (gleiche Dichte oben wie unten), statt sie am Horizont zu verdichten.</div>
+      <div class="hint">Aus = korrekte Perspektive (Quadrate verkleinern sich mit der Tiefe, verdichten sich am Horizont). An = Quer-/Tiefenlinien gleichmäßig über das Bild verteilt (gleiche Dichte oben wie unten) — das bricht bewusst die echte Perspektive, die Zellen wirken dann nicht mehr quadratisch.</div>
     </div>
   </div>
 </div>
@@ -737,10 +737,13 @@
     // optional cap on the number of grid lines per plane (0 = that
     // direction off). h = horizontal lines, v = vertical/depth lines.
     gridLimit: { on: false, h: 10, v: 10 },
-    // evenDepth: space the floor's depth lines evenly ON SCREEN (uniform in
-    // inverse depth) instead of uniform in world Z -> same density top &
-    // bottom, no bunching at the horizon.
-    evenDepth: true,
+    // evenDepth: OPTIONAL look that spaces the floor's depth lines evenly ON
+    // SCREEN (uniform in inverse depth) instead of uniform in world Z -> same
+    // density top & bottom, no bunching at the horizon. This deliberately
+    // breaks true perspective (cells stop shrinking with depth, so they no
+    // longer look square), so it is OFF by default: the default is a correct
+    // pinhole-camera perspective where the squares recede and shrink naturally.
+    evenDepth: false,
     bodies: [], // faint ghostly Tetris-like wireframe solids drifting through
     clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).

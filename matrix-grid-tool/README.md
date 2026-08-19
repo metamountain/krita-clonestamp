@@ -57,12 +57,14 @@ Dämpfung) and the **Ebenen** list/editor. The rarely-changed base settings
 an optional **Rasterlinien-Limit** — cap the number of grid lines per
 plane, e.g. horizontal 10 / vertical 0 for horizontal bands only — and a
 **Tiefe → Gleichmäßig verteilt** toggle) live behind the **⚙️ gear**
-(top-right) so the preview keeps maximum area — handy on a phone. With
-*Gleichmäßig verteilt* on (the default), the floor's depth rows are spaced
-evenly **on screen** (uniform in inverse depth) instead of in world metres,
-so they no longer bunch up into a dense band at the horizon — you get the
-same number of grid rows near the bottom as near the top, evenly spread
-through the Z-axis. Turn it off for physically metre-accurate spacing. The tool opens on a **10-plane stack** at **4:5**; **🗑**
+(top-right) so the preview keeps maximum area — handy on a phone. By
+default the floor uses a **correct pinhole-camera perspective**: cells
+recede and shrink with depth and bunch toward the horizon, so squares look
+square. Turn *Gleichmäßig verteilt* **on** for an alternative look that
+spaces the depth rows evenly **on screen** (uniform in inverse depth) — same
+row density top and bottom, no horizon bunching — at the cost of true
+perspective (cells stop shrinking with depth, so they no longer look
+square). The tool opens on a **10-plane stack** at **4:5**; **🗑**
 clears back to one.
 
 1. **Auflösung**: pick a resolution preset (default 5:4 portrait,
