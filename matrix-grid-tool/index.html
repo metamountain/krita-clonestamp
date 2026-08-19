@@ -1268,7 +1268,10 @@
     // across rows. Respawn far (or near when riding backwards); the INITIAL
     // population (near === undefined) spreads across the whole field.
     b.df = near === true ? 0.92 : near === false ? 0.05 : Math.random();
-    b.color = BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)];
+    // Varied, colourful bodies (mostly vivid hues, sometimes a pale/white one)
+    // so a re-roll visibly changes their colour, not just their position.
+    b.color = chance(0.18) ? BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)]
+                           : randomColor();
     b.opacity = rnd(42, 66);   // solid enough to read against the busy pastel scene
     b.lineWidth = rnd(1.5, 2.5);
     return b;
@@ -1609,6 +1612,7 @@
       l.accentPhaseA = Math.floor(Math.random() * 7) - 3; // re-offset (incl. -x)
       l.accentPhaseB = Math.floor(Math.random() * 7) - 3; // z/depth, incl. -z
     }
+    for (const b of state.bodies) b.color = chance(0.18) ? "#ffffff" : randomColor();
     state.bgColor = randomBgColor(); // any colour, never forced black
     syncBgControls();
     renderLayerList();     // refresh chips
