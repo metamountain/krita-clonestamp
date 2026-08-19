@@ -1464,6 +1464,10 @@
     // Background: any random colour (never forced black)
     state.bgColor = randomBgColor();
     syncBgControls();
+    // Re-roll the field patterns too: switch to per-plane random so EACH plane
+    // gets its own fresh pattern (fieldsSpec("random") randomises per call).
+    state.fieldsMode = "random";
+    fieldsModeSelect.value = "random";
 
     // Many layers at once -- a rich stack. Mostly horizontal planes (so the
     // physics stack is lively), occasionally a wall thrown in.
