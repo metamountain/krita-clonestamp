@@ -1261,7 +1261,7 @@
     b.planeRef = null;                                   // re-pick a fresh anchor on (re)spawn
     b.cubes = BODY_SHAPES[Math.floor(Math.random() * BODY_SHAPES.length)];
     b.unit = pick([1, 1, 1, 2, 2, 3]);                   // size in whole cells (mostly small)
-    b.gx = Math.round(rnd(-8, 8));                        // integer grid column
+    b.gx = Math.round(rnd(-13, 13));                      // integer grid column (wide spread)
     // Depth as a normalised far(0)->near(1) parameter, mapped to a world Z each
     // frame through the SAME formula the plane's floor uses (even or uniform), so
     // the body rides the grid on screen exactly like a floor row -- no sliding
@@ -1562,6 +1562,9 @@
     }
     state.layers = layers;
     state.activeLayerId = layers[0].id;
+    // Re-roll the bodies too: fresh random position/shape/anchor for each, so
+    // the dice actually moves them instead of leaving them where they were.
+    for (const b of state.bodies) spawnBody(b);
     renderLayerList();
     renderActiveEditor();
     render();
