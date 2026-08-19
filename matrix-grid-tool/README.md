@@ -39,7 +39,7 @@ dials you scrub for instant, chaotic results:
   moves the planes moves the bodies** — kick the stack and they bounce along.
   They stay snapped to the grid and ride the plane's scroll toward the viewer,
   growing as they approach. No tumbling, no arbitrary scale; perspective-correct
-  (0 = none).
+  (0–99; 0 = none).
 - **Hintergrund** — the background colour: a slider (0 = black, up = a
   dark tinted hue), a colour picker, and a 🎲 button that randomises just
   the background. Default is a dark tint (not black). The 🎨 palette
