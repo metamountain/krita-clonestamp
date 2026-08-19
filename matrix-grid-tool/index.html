@@ -421,6 +421,11 @@
         <span id="jamBodiesVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">4</span>
       </div>
       <div class="row">
+        <label>Körper-Flächen</label>
+        <input type="range" id="jamBodyFill" min="0" max="100" step="1" value="50">
+        <span id="jamBodyFillVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">50%</span>
+      </div>
+      <div class="row">
         <label>Farbe</label>
         <input type="range" id="jamHue" min="0" max="360" step="1" value="0">
         <span id="jamHueVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">0°</span>
@@ -744,6 +749,7 @@
     // longer look square), so it is OFF by default: the default is a correct
     // pinhole-camera perspective where the squares recede and shrink naturally.
     evenDepth: false,
+    bodyFill: 50, // body face-fill amount (0 = wireframe only, 100 = full)
     bodies: [], // faint ghostly Tetris-like wireframe solids drifting through
     clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).
@@ -851,6 +857,8 @@
   const jamHueVal = document.getElementById("jamHueVal");
   const jamBodiesInput = document.getElementById("jamBodies");
   const jamBodiesVal = document.getElementById("jamBodiesVal");
+  const jamBodyFillInput = document.getElementById("jamBodyFill");
+  const jamBodyFillVal = document.getElementById("jamBodyFillVal");
   const fieldsModeSelect = document.getElementById("fieldsMode");
   const bgSliderInput = document.getElementById("bgSlider");
   const bgPick = document.getElementById("bgPick");
@@ -903,6 +911,11 @@
   jamBodiesInput.addEventListener("input", () => {
     jamBodiesVal.textContent = jamBodiesInput.value;
     setBodyCount(Number(jamBodiesInput.value));
+    if (!state.anim.playing) render();
+  });
+  jamBodyFillInput.addEventListener("input", () => {
+    state.bodyFill = Number(jamBodyFillInput.value);
+    jamBodyFillVal.textContent = state.bodyFill + "%";
     if (!state.anim.playing) render();
   });
 
@@ -1307,9 +1320,9 @@
       }
       if (!ok || !segs.length) continue;
       const a = clamp01(b.opacity / 100);
-      // faint filled faces first (back-to-front) ...
+      // filled faces first (back-to-front), scaled by the Körper-Flächen dial ...
       faces.sort((u, v) => v.z - u.z);
-      fillQuads(faces.map((f) => f.q), col, a * 0.5);
+      fillQuads(faces.map((f) => f.q), col, a * clamp01(state.bodyFill / 100));
       // ... then a dark halo so the body reads on BRIGHT pastel scenes too ...
       strokeSegs(segs, "#000000", b.lineWidth + 2, a * 0.6);
       // ... then the bright edges on top.
