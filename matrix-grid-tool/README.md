@@ -41,8 +41,10 @@ dials you scrub for instant, chaotic results:
   growing as they approach. No tumbling, no arbitrary scale; perspective-correct
   (0–99; 0 = none).
 - **Körper-Flächen** — how strongly the body faces are filled, 0–100 %
-  (0 = wireframe only, 100 = fully filled). The wireframe edges stay put; only
-  the translucent face fill scales.
+  (0 = wireframe only, 100 = fully filled). Only the translucent face fill scales.
+- **Körper-Kontur** — the body wireframe (outline) opacity, 0–100 %
+  (0 = no edges, 100 = full). Combine with **Körper-Flächen** for anything from
+  a bare wireframe to a solid, outline-free block.
 - **Hintergrund** — the background colour: a slider (0 = black, up = a
   dark tinted hue), a colour picker, and a 🎲 button that randomises just
   the background. Default is a dark tint (not black). The 🎨 palette
