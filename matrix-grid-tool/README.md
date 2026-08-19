@@ -54,7 +54,14 @@ dials you scrub for instant, chaotic results:
   Reihen (rows), Spalten (columns), Streu (scatter), or Zufall (random
   per layer — a mix, where some layers stay plain line grids and others
   get a pattern). Each layer can also override its own pattern in the editor.
-- **▶/⏸**, **💥 Anstoßen** (kick the stack), **🎲** (re-roll a whole batch).
+- **🌈 Palette** — cycle through **10 curated, coordinated colour palettes**
+  (Synthwave, Vaporwave, Miami, Nord, Dracula, Gruvbox, Solarized, Cyberpunk,
+  Sunset, Mono). Each sets a matching background and recolours the planes and
+  bodies from the palette; the button shows the current palette's name. Bodies
+  are tinted across a wide tonal range (darker and lighter) so they read as a
+  set, not one flat brightness.
+- **▶/⏸**, **💥 Anstoßen** (kick the stack), **🎲** (re-roll a whole batch),
+  **🎨** (random recolour).
 
 Below the jam surface: a **Physik (fein)** panel (Dichte, Gravitation,
 Dämpfung) and the **Ebenen** list/editor. The rarely-changed base settings

@@ -457,6 +457,9 @@
           <option value="random" selected>Random</option>
         </select>
       </div>
+      <div class="row">
+        <button id="paletteBtn" style="width:100%;" title="Cycle a matching colour palette">🌈 Palette</button>
+      </div>
       <div class="hint">Scrub for chaos: Speed &amp; Force field drive the physics, H-/V-planes spawn or remove planes live, Colour rotates the palette, Fields = coloured cell patterns (2×2, 3×3, Checker) or off. 💥 kick · 🎲 re-roll.</div>
     </section>
 
@@ -671,6 +674,22 @@
   // colour by index, opacity down with height/index.
   const LAYER_HUES = ["#8fdcff", "#ff9ecb", "#a6f0a6", "#ffd27f", "#c9a9ff", "#9fe8d8"];
   const BASE_COLOR = "#39c9ff"; // base grid colour (deliberately NOT white)
+
+  // 10 curated, coordinated colour palettes (well-known schemes: synthwave,
+  // vaporwave, Nord, Dracula, Gruvbox, Solarized, ...). Each has a background
+  // and a set of matching hues used for the planes and bodies.
+  const PALETTES = [
+    { name: "Synthwave", bg: "#1a1033", cols: ["#ff2a6d", "#05d9e8", "#f9c80e", "#b967ff", "#556dc8", "#ff8e36"] },
+    { name: "Vaporwave", bg: "#2b1055", cols: ["#ff71ce", "#01cdfe", "#05ffa1", "#b967ff", "#fffb96"] },
+    { name: "Miami",     bg: "#0f1b3d", cols: ["#40e0d0", "#ff7f50", "#ff6ec7", "#f6d743", "#21d4fd"] },
+    { name: "Nord",      bg: "#2e3440", cols: ["#88c0d0", "#81a1c1", "#5e81ac", "#a3be8c", "#ebcb8b", "#bf616a", "#b48ead"] },
+    { name: "Dracula",   bg: "#282a36", cols: ["#ff79c6", "#8be9fd", "#50fa7b", "#bd93f9", "#ffb86c", "#f1fa8c", "#ff5555"] },
+    { name: "Gruvbox",   bg: "#282828", cols: ["#fb4934", "#b8bb26", "#fabd2f", "#83a598", "#d3869b", "#8ec07c", "#fe8019"] },
+    { name: "Solarized", bg: "#002b36", cols: ["#b58900", "#cb4b16", "#dc322f", "#d33682", "#6c71c4", "#268bd2", "#2aa198", "#859900"] },
+    { name: "Cyberpunk", bg: "#0d0221", cols: ["#f706cf", "#00e5ff", "#fdff00", "#ff124f", "#651fff"] },
+    { name: "Sunset",    bg: "#1f0f2e", cols: ["#ff512f", "#f09819", "#ff6a88", "#ff99ac", "#7f5af0"] },
+    { name: "Mono",      bg: "#0d0d0d", cols: ["#ffffff", "#cfcfcf", "#9a9a9a", "#666666", "#3a3a3a"] },
+  ];
   function autoStyle(index) {
     if (index <= 0) return { color: BASE_COLOR, opacity: 100 };
     return {
@@ -845,6 +864,7 @@
   const addLayerBtn = document.getElementById("addLayer");
   const randomBtn = document.getElementById("randomBtn");
   const colorBtn = document.getElementById("colorBtn");
+  const paletteBtn = document.getElementById("paletteBtn");
   const clearBtn = document.getElementById("clearBtn");
   const qualityInput = document.getElementById("quality");
   const qualityVal = document.getElementById("qualityVal");
@@ -1268,10 +1288,11 @@
     // across rows. Respawn far (or near when riding backwards); the INITIAL
     // population (near === undefined) spreads across the whole field.
     b.df = near === true ? 0.92 : near === false ? 0.05 : Math.random();
-    // Varied, colourful bodies (mostly vivid hues, sometimes a pale/white one)
-    // so a re-roll visibly changes their colour, not just their position.
-    b.color = chance(0.18) ? BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)]
-                           : randomColor();
+    // Varied, colourful bodies spanning a wide tonal range (dark -> light, via
+    // bodyColor), with an occasional pale hue -- so a re-roll visibly changes
+    // their colour and brightness, not just their position.
+    b.color = chance(0.12) ? BODY_HUES[Math.floor(Math.random() * BODY_HUES.length)]
+                           : bodyColor();
     b.opacity = rnd(42, 66);   // solid enough to read against the busy pastel scene
     b.lineWidth = rnd(1.5, 2.5);
     return b;
@@ -1578,6 +1599,44 @@
     const c = hslToRgb(Math.random(), 0.55 + Math.random() * 0.35, 0.5 + Math.random() * 0.2);
     return rgbToHex(c.r, c.g, c.b);
   }
+  // A random BODY colour spanning a wide tonal range (dark -> light), so bodies
+  // are not all the same brightness.
+  function bodyColor() {
+    const c = hslToRgb(Math.random(), 0.4 + Math.random() * 0.5, 0.3 + Math.random() * 0.55);
+    return rgbToHex(c.r, c.g, c.b);
+  }
+  // Shift a colour's lightness by dl (keeps hue/saturation) -> darker/lighter tints.
+  function toneJitter(hex, dl) {
+    const c = hexToRgb(hex);
+    const [h, s, l] = rgbToHsl(c.r, c.g, c.b);
+    const o = hslToRgb(h, s, Math.max(0.1, Math.min(0.93, l + dl)));
+    return rgbToHex(o.r, o.g, o.b);
+  }
+  // Apply one of the curated PALETTES to the whole scene: background, the plane
+  // stack (cycled through the palette) and the bodies (each a darker/lighter
+  // tint of a palette colour, for tonal variety). Resets the hue dial so the
+  // palette's colours are shown as-is.
+  let paletteIdx = -1;
+  function applyPalette(idx) {
+    const p = PALETTES[idx];
+    if (!p) return;
+    state.jam.hue = 0; jamHueInput.value = 0; jamHueVal.textContent = "0°";
+    state.bgColor = p.bg; syncBgControls();
+    const cols = p.cols;
+    state.layers.forEach((l, i) => {
+      l.color = toneJitter(cols[i % cols.length], rnd(-0.12, 0.12));
+      l.accentColor = chance(0.5) ? l.color : cols[(i + 2) % cols.length];
+    });
+    for (const b of state.bodies) b.color = toneJitter(pick(cols), rnd(-0.4, 0.4));
+    renderLayerList();
+    renderActiveEditor();
+    render();
+  }
+  function cyclePalette() {
+    paletteIdx = (paletteIdx + 1) % PALETTES.length;
+    applyPalette(paletteIdx);
+    if (paletteBtn) paletteBtn.textContent = "🌈 " + PALETTES[paletteIdx].name;
+  }
   // Background slider -> colour: 0 = black, 1..100 = a dark tinted hue.
   function bgFromSlider(v) {
     if (v <= 0) return "#000000";
@@ -1612,7 +1671,7 @@
       l.accentPhaseA = Math.floor(Math.random() * 7) - 3; // re-offset (incl. -x)
       l.accentPhaseB = Math.floor(Math.random() * 7) - 3; // z/depth, incl. -z
     }
-    for (const b of state.bodies) b.color = chance(0.18) ? "#ffffff" : randomColor();
+    for (const b of state.bodies) b.color = bodyColor();
     state.bgColor = randomBgColor(); // any colour, never forced black
     syncBgControls();
     renderLayerList();     // refresh chips
@@ -1991,6 +2050,7 @@
   addLayerBtn.addEventListener("click", addLayer);
   randomBtn.addEventListener("click", randomizeScene);
   colorBtn.addEventListener("click", randomizeColors);
+  paletteBtn.addEventListener("click", cyclePalette);
   clearBtn.addEventListener("click", clearLayers);
 
   // ---------- Rendering ----------
