@@ -584,6 +584,15 @@
       </div>
       <div class="hint">Aus = korrekte Perspektive (Quadrate verkleinern sich mit der Tiefe, verdichten sich am Horizont). An = Quer-/Tiefenlinien gleichmäßig über das Bild verteilt (gleiche Dichte oben wie unten) — das bricht bewusst die echte Perspektive, die Zellen wirken dann nicht mehr quadratisch.</div>
     </div>
+    <div class="subpanel">
+      <h3>Vertikale Wände</h3>
+      <div class="row">
+        <label>Deckkraft</label>
+        <input type="range" id="wallOpacity" min="0" max="100" step="1" value="20">
+        <span id="wallOpacityVal" style="min-width:38px;text-align:right;color:var(--text-dim);font-size:12px;">20%</span>
+      </div>
+      <div class="hint">Wände sind große fronto-parallele Flächen mit groben Zellen — voll deckend wirken sie als massive Blöcke, die stören. Niedrig halten für einen geisterhaften, transparenten Look (0 = unsichtbar, 100 = voll deckend).</div>
+    </div>
   </div>
 </div>
 
@@ -750,6 +759,7 @@
     // pinhole-camera perspective where the squares recede and shrink naturally.
     evenDepth: false,
     bodyFill: 50, // body face-fill amount (0 = wireframe only, 100 = full)
+    wallOpacity: 20, // vertical walls kept ghostly (0 = invisible, 100 = solid)
     bodies: [], // faint ghostly Tetris-like wireframe solids drifting through
     clock: 0, // animation phase time in seconds (scaled by speed)
     // list order = z-order; index 0 is drawn LAST (topmost).
@@ -875,6 +885,13 @@
   gridLimitOn.addEventListener("change", () => { state.gridLimit.on = gridLimitOn.checked; render(); });
   document.getElementById("evenDepth").addEventListener("change", (e) => {
     state.evenDepth = e.target.checked; render();
+  });
+  const wallOpacityInput = document.getElementById("wallOpacity");
+  const wallOpacityVal = document.getElementById("wallOpacityVal");
+  wallOpacityInput.addEventListener("input", () => {
+    state.wallOpacity = Number(wallOpacityInput.value);
+    wallOpacityVal.textContent = state.wallOpacity + "%";
+    render();
   });
   gridLimitH.addEventListener("change", () => {
     state.gridLimit.h = Math.max(0, Math.round(Number(gridLimitH.value) || 0)); render();
@@ -2053,7 +2070,11 @@
     } else if (layer.type === "hplane") {
       drawHPlane(layer, alpha, col, acol, aA);
     } else if (layer.type === "wall") {
-      drawWall(layer, alpha, col, acol, aA);
+      // Walls are big fronto-parallel planes with coarse cells -- at full
+      // opacity they read as solid blocks that dominate and look wrong. Keep
+      // them ghostly: scale their line + fill opacity by the Wände dial.
+      const wf = clamp01(state.wallOpacity / 100);
+      drawWall(layer, alpha * wf, col, acol, aA * wf);
     }
   }
 

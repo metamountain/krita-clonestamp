@@ -58,8 +58,11 @@ Below the jam surface: a **Physik (fein)** panel (Dichte, Gravitation,
 Dämpfung) and the **Ebenen** list/editor. The rarely-changed base settings
 (Auflösung with presets incl. **4:5** and **Custom**, Kamera, Hintergrund,
 an optional **Rasterlinien-Limit** — cap the number of grid lines per
-plane, e.g. horizontal 10 / vertical 0 for horizontal bands only — and a
-**Tiefe → Gleichmäßig verteilt** toggle) live behind the **⚙️ gear**
+plane, e.g. horizontal 10 / vertical 0 for horizontal bands only — a
+**Tiefe → Gleichmäßig verteilt** toggle, and a **Vertikale Wände → Deckkraft**
+slider that keeps the fronto-parallel walls ghostly/transparent by default
+(0 = invisible, 100 = solid) so their coarse cells don't read as solid blocks)
+live behind the **⚙️ gear**
 (top-right) so the preview keeps maximum area — handy on a phone. By
 default the floor uses a **correct pinhole-camera perspective**: cells
 recede and shrink with depth and bunch toward the horizon, so squares look
