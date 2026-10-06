@@ -18,7 +18,7 @@ port for Krita 5.x is kept alongside it.
 
 | Your Krita | Download | What you get |
 | --- | --- | --- |
-| **6.0.4 / 6.0.4.1, Windows x64** | **[Release v2.0.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.0.0)** (`clonestamp-krita-6.0.4-windows-x64.zip`) | Native C++ tool with a real toolbox icon — **recommended** |
+| **6.0.4 / 6.0.4.1, Windows x64** | **[Release v2.0.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.0.0)** (`clonestamp_tool-krita-6.0.4-windows-x64.zip`, import as Python plugin) | Native C++ tool with a real toolbox icon — **recommended** |
 | 5.x | [Release v1.0.2-krita5](https://github.com/metamountain/krita-clonestamp/releases/tag/v1.0.2-krita5) or [clonestamp.zip](https://github.com/metamountain/krita-clonestamp/raw/main/python-plugin/clonestamp.zip) | Python plugin (docker), see [below](#python-plugin-krita-5x) |
 | other 6.x | not yet — each Krita version needs its own build; please [open an issue](https://github.com/metamountain/krita-clonestamp/issues) | |
 
@@ -34,19 +34,29 @@ Preview").
 
 ### Installation (Krita 6.0.4, Windows x64)
 
-1. Download `clonestamp-krita-6.0.4-windows-x64.zip` from
-   [Release v2.0.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.0.0)
-   (or the [`release/krita-6.0.4-windows-x64/`](release/krita-6.0.4-windows-x64) folder)
-   and unzip it.
-2. Run `install.cmd`. It checks that your Krita is a **6.0.4.x** build, asks
-   for administrator rights, and copies `kritatoolclonestamp.dll` into
-   `C:\Program Files\Krita (x64)\lib\kritaplugins\`. Krita installed
-   elsewhere: `install.cmd "D:\Path\To\Krita"`. Krita may stay open during
-   the install.
-3. Restart Krita. The tool appears in the toolbox next to **Smart Patch**.
+**Recommended — like any Python plugin, no admin rights:**
 
-To uninstall, delete
-`C:\Program Files\Krita (x64)\lib\kritaplugins\kritatoolclonestamp.dll`.
+1. Download **`clonestamp_tool-krita-6.0.4-windows-x64.zip`** from
+   [Release v2.0.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.0.0)
+   (do not unzip it).
+2. In Krita: **Tools › Scripts › Import Python Plugin from File...**, select
+   the zip, answer **Yes** to enabling the plugin.
+3. Restart Krita. The tool appears in the toolbox next to **Smart Patch**
+   (stamp icon).
+
+The zip contains a tiny loader plugin (`clonestamp_tool`) plus the native
+tool library; the loader only loads that library from its own folder and
+registers the tool — the same model as Acly's
+[krita-ai-tools](https://github.com/Acly/krita-ai-tools). On a different
+Krita version it refuses to load and tells you so. Uninstall: disable or
+delete `clonestamp_tool` in **Settings › Configure Krita › Python Plugin
+Manager**.
+
+**Alternative — system-wide with `install.cmd`:** download
+`clonestamp-krita-6.0.4-windows-x64.zip`, unzip, run `install.cmd` (checks
+the Krita version, asks for admin rights, copies `kritatoolclonestamp.dll`
+into `C:\Program Files\Krita (x64)\lib\kritaplugins\`). Uninstall:
+delete that DLL. Both ways can coexist; the tool registers only once.
 
 > **Krita 6.0.4.x on Windows x64 only.** A compiled Krita plugin is
 > binary-locked to the Krita build it was compiled against (here: Qt 6.8,
@@ -191,6 +201,7 @@ after an update, since Krita loads Python plugins only at startup).
 | --- | --- |
 | `Tool-plugin/` | The native C++ `KisTool` implementation — the flagship product. |
 | `release/` | Prebuilt per-Krita-version release folders (currently `krita-6.0.4-windows-x64/` with `install.cmd` + the DLL). |
+| `Tool-plugin/pykrita-loader/` | The Python loader plugin (`clonestamp_tool`) packaged with the DLL into the importable zip. |
 | `Tool-plugin/windows/` | Windows build/deploy scripts (`build-krita.bat`, `deploy-tool.cmd`). |
 | `python-plugin/` | The installable Krita 5.x Python plugin and the packaged `clonestamp.zip`. |
 | `tools/krita_mcp/` | Automated test harness — an MCP bridge (`kritamcp` plugin + `krita_mcp.py` server + `kcall.py` CLI) and the test scripts. |

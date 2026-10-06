@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=clonestamp_tool
+X-Python-2-Compatible=false
+X-Krita-Manual=manual.html
+Name=Clone Stamp Tool
+Comment=Photoshop-style Clone Stamp with source preview and brush tips (native tool, Krita 6.0.4 Windows)

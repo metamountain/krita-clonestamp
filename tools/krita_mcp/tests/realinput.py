@@ -27,6 +27,10 @@ class RealInput:
         # shortcut and crashed the next addView. The first click then
         # activates Krita normally. Call lower_krita() when done.
         self.hwnd = int(self.cw.window().winId())
+        # Safety: never click blind. A minimized/hidden Krita would send the
+        # real clicks to whatever window is underneath (the user's apps).
+        if user32.IsIconic(self.hwnd) or not user32.IsWindowVisible(self.hwnd):
+            raise RuntimeError("Krita is minimized or hidden -- refusing to send real mouse input")
         user32.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_FLAGS)
         self.pump(0.2)
         # One click on the status bar activates the window (harmless spot);
@@ -63,6 +67,8 @@ class RealInput:
         return int(round(p.x() * dpr)), int(round(p.y() * dpr))
 
     def move(self, x, y, settle=0.015):
+        if user32.IsIconic(self.hwnd):
+            raise RuntimeError("Krita got minimized during the test -- aborting real input")
         user32.SetCursorPos(*self.screen_pt(x, y))
         self.pump(settle)
 
