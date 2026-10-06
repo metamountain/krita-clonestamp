@@ -60,12 +60,13 @@ import os
 import time
 import traceback
 from krita import DockWidget, Krita
-from PyQt5.QtCore import QEvent, QPointF, QRectF, QTimer, Qt
-from PyQt5.QtGui import (
+from PyQt6.QtCore import QEvent, QPointF, QRectF, QTimer, Qt
+from PyQt6.QtGui import (
     QColor, QCursor, QIcon, QImage, QPainter, QPen, QPixmap, QRadialGradient,
 )
-from PyQt5.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QOpenGLWidget,
+from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+from PyQt6.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel,
     QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -172,9 +173,9 @@ class _StrokeOverlay(QWidget):
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WA_NoSystemBackground)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # Required for a plain child widget to actually composite on top of
         # a QOpenGLWidget -- without this, Qt's docs note the GL surface's
         # own native/texture compositing isn't synchronized with normal
@@ -183,13 +184,13 @@ class _StrokeOverlay(QWidget):
         # preview while dragging" -- the overlay was being painted every
         # tick, just never visible until Krita's own repaint (of the real
         # committed pixels) took over at release.
-        self.setAttribute(Qt.WA_AlwaysStackOnTop)
+        self.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop)
         self._pixmap = None
         self._last_ring_rect = None
 
     def reset(self, size):
         self._pixmap = QPixmap(size)
-        self._pixmap.fill(Qt.transparent)
+        self._pixmap.fill(Qt.GlobalColor.transparent)
         self._last_ring_rect = None
         self.setGeometry(0, 0, size.width(), size.height())
 
@@ -197,7 +198,7 @@ class _StrokeOverlay(QWidget):
         if self._pixmap is None:
             return
         painter = QPainter(self._pixmap)
-        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         painter.drawImage(target_rect, image)
         painter.end()
         self.update(target_rect.toAlignedRect())
@@ -212,10 +213,10 @@ class _StrokeOverlay(QWidget):
         the per-tick cost small even at the faster resize cadence."""
         if self._pixmap is None:
             return
-        self._pixmap.fill(Qt.transparent)
+        self._pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(self._pixmap)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setBrush(Qt.NoBrush)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         x = center.x() - diameter / 2.0
         y = center.y() - diameter / 2.0
         painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
@@ -224,9 +225,9 @@ class _StrokeOverlay(QWidget):
         painter.drawEllipse(QRectF(x, y, diameter, diameter))
         hd = max(3.0, diameter * hardness)
         inset = (diameter - hd) / 2.0
-        painter.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt.DashLine))
+        painter.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt.PenStyle.DashLine))
         painter.drawEllipse(QRectF(x + inset + 1, y + inset + 1, hd, hd))
-        painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.DashLine))
+        painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.PenStyle.DashLine))
         painter.drawEllipse(QRectF(x + inset, y + inset, hd, hd))
         painter.end()
 
@@ -368,7 +369,7 @@ class ClonestampDocker(DockWidget):
             "On canvas: Shift+drag vertically (up = harder, down = softer).")
         hardnessRow = QHBoxLayout()
         hardnessRow.addWidget(QLabel("Hardness:"))
-        self.hardnessSlider = QSlider(Qt.Horizontal)
+        self.hardnessSlider = QSlider(Qt.Orientation.Horizontal)
         self.hardnessSlider.setRange(0, 100)
         self.hardnessSlider.setValue(int(core.STATE.brush_hardness * 100))
         self.hardnessSlider.setToolTip(hardness_tip)
@@ -717,7 +718,7 @@ class ClonestampDocker(DockWidget):
         # matches self._canvas_widget at all. Remove once the "doesn't work
         # after opening a new document" report is root-caused; see the
         # matching logs in _find_canvas_widget/canvasChanged.
-        if event.type() == QEvent.MouseButtonPress:
+        if event.type() == QEvent.Type.MouseButtonPress:
             _debug("eventFilter: PRESS obj=%s id=%s tracked_id=%s match=%s" % (
                 obj.__class__.__name__, id(obj),
                 id(self._canvas_widget) if self._canvas_widget is not None else None,
@@ -728,11 +729,11 @@ class ClonestampDocker(DockWidget):
 
         et = event.type()
         try:
-            if et == QEvent.MouseButtonPress:
+            if et == QEvent.Type.MouseButtonPress:
                 return self._onCanvasPress(event)
-            elif et == QEvent.MouseButtonRelease:
+            elif et == QEvent.Type.MouseButtonRelease:
                 return self._onCanvasRelease(event)
-            elif et == QEvent.MouseMove:
+            elif et == QEvent.Type.MouseMove:
                 # Swallowed for the entire time the plugin is armed, not
                 # just during a resize drag -- previously only the resize
                 # case was covered, but the same mechanism applies whenever
@@ -770,8 +771,8 @@ class ClonestampDocker(DockWidget):
         return core.map_widget_to_document(canvas, self._canvas_widget, event.pos())
 
     def _onCanvasPress(self, event):
-        _debug("_onCanvasPress: button=%d mods=%s" % (event.button(), event.modifiers()))
-        if event.button() != Qt.LeftButton:
+        _debug("_onCanvasPress: button=%s mods=%s" % (event.button(), event.modifiers()))
+        if event.button() != Qt.MouseButton.LeftButton:
             return False
 
         canvas = self._currentCanvas()
@@ -781,7 +782,7 @@ class ClonestampDocker(DockWidget):
 
         mods = event.modifiers()
 
-        if mods & Qt.ShiftModifier:
+        if mods & Qt.KeyboardModifier.ShiftModifier:
             self._resize_active = True
             self._resize_start_global = QCursor.pos()
             self._resize_start_size = core.STATE.brush_size
@@ -803,7 +804,7 @@ class ClonestampDocker(DockWidget):
             # Blanked (not just unset) and warped back to this exact spot
             # every tick for the whole drag -- see _onResizeTick for why
             # that combination finally holds without flicker this time.
-            self._canvas_widget.setCursor(Qt.BlankCursor)
+            self._canvas_widget.setCursor(Qt.CursorShape.BlankCursor)
             # The signature cache must not survive the cursor swap, or a
             # resize that lands back on identical values would skip the
             # setCursor() at release and leave the cursor blank for good.
@@ -817,7 +818,7 @@ class ClonestampDocker(DockWidget):
         doc = Krita.instance().activeDocument()
 
         try:
-            if mods & Qt.ControlModifier:
+            if mods & Qt.KeyboardModifier.ControlModifier:
                 core.sample_source_point(doc, core.STATE, doc_point)
                 self._describeLiveSource()
                 self.brushStatusLabel.setText("Source sampled.")
@@ -840,8 +841,8 @@ class ClonestampDocker(DockWidget):
         return True
 
     def _onCanvasRelease(self, event):
-        _debug("_onCanvasRelease: button=%d stroke_active=%s" % (event.button(), self._stroke_active))
-        if event.button() != Qt.LeftButton:
+        _debug("_onCanvasRelease: button=%s stroke_active=%s" % (event.button(), self._stroke_active))
+        if event.button() != Qt.MouseButton.LeftButton:
             return False
         if self._stroke_active:
             doc = Krita.instance().activeDocument()
@@ -1039,7 +1040,7 @@ class ClonestampDocker(DockWidget):
             return
         mask = core.build_alpha_mask(size, core.STATE.brush_hardness, core.STATE.brush_opacity)
         painter = QPainter(patch)
-        painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
         painter.drawImage(0, 0, mask)
         painter.end()
 
@@ -1068,7 +1069,7 @@ class ClonestampDocker(DockWidget):
             # cursor at all would leave the user pointing blind).
             if self._cursor_sig != "outline-off":
                 self._cursor_sig = "outline-off"
-                self._canvas_widget.setCursor(QCursor(Qt.CrossCursor))
+                self._canvas_widget.setCursor(QCursor(Qt.CursorShape.CrossCursor))
             return
         canvas = self._currentCanvas()
         zoom = canvas.zoomLevel() if canvas else 1.0
@@ -1117,11 +1118,11 @@ class ClonestampDocker(DockWidget):
         half = pixmap_size // 2
 
         pixmap = QPixmap(pixmap_size, pixmap_size)
-        pixmap.fill(Qt.transparent)
+        pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         try:
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            painter.setBrush(Qt.NoBrush)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
 
             # Destination ring (at pixmap center).
             dl = half - diameter // 2
@@ -1154,10 +1155,10 @@ class ClonestampDocker(DockWidget):
                                 QColor(255, 255, 255, 12))
                 grad.setColorAt(1.0, QColor(255, 255, 255, 0))
                 painter.setBrush(grad)
-                painter.setPen(Qt.NoPen)
+                painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawEllipse(dl, dt, diameter, diameter)
 
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
             painter.drawEllipse(dl + 1, dt + 1, diameter, diameter)
             painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
@@ -1175,9 +1176,9 @@ class ClonestampDocker(DockWidget):
 
             hardness_diameter = max(3, int(diameter * core.STATE.brush_hardness))
             inset = (diameter - hardness_diameter) // 2
-            painter.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt.DashLine))
+            painter.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt.PenStyle.DashLine))
             painter.drawEllipse(dl + inset + 1, dt + inset + 1, hardness_diameter, hardness_diameter)
-            painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.DashLine))
+            painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.PenStyle.DashLine))
             painter.drawEllipse(dl + inset, dt + inset, hardness_diameter, hardness_diameter)
 
             # Source ring + crosshair at the sample offset (follows cursor,
@@ -1188,7 +1189,7 @@ class ClonestampDocker(DockWidget):
                 sy = int(half + offset[1])
                 sl = sx - diameter // 2
                 st = sy - diameter // 2
-                painter.setBrush(Qt.NoBrush)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.setPen(QPen(QColor(0, 0, 0, 100), 1))
                 painter.drawEllipse(sl + 1, st + 1, diameter, diameter)
                 painter.setPen(QPen(QColor(255, 255, 255, 100), 1))
@@ -1255,12 +1256,12 @@ class ClonestampDocker(DockWidget):
         if patch is None:
             self._preview_cache_image = None
             return
-        preview = patch.scaled(diameter, diameter, Qt.IgnoreAspectRatio,
-                                Qt.SmoothTransformation)
-        preview = preview.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+        preview = patch.scaled(diameter, diameter, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                Qt.TransformationMode.SmoothTransformation)
+        preview = preview.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
         mask = core.build_alpha_mask(diameter, core.STATE.brush_hardness, 70)
         mask_painter = QPainter(preview)
-        mask_painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        mask_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
         mask_painter.drawImage(0, 0, mask)
         mask_painter.end()
         self._preview_cache_image = preview

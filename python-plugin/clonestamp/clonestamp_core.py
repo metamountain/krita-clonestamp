@@ -43,8 +43,8 @@ Feature map for this file specifically:
 """
 
 import os
-from PyQt5.QtCore import QRect, QRectF, QByteArray, Qt, QPointF
-from PyQt5.QtGui import QImage, QPainter, QColor, QRadialGradient
+from PyQt6.QtCore import QRect, QRectF, QByteArray, Qt, QPointF
+from PyQt6.QtGui import QImage, QPainter, QColor, QRadialGradient
 
 # Windows-only by design: TEMP (and the backslash separator) only resolve to
 # a real location there. On Linux/macOS TEMP is normally unset, the path
@@ -84,8 +84,8 @@ GITHUB_URL = "https://github.com/metamountain/krita-clonestamp"
 
 # Krita's default 8-bit RGBA layers store pixels as straight (non-premultiplied)
 # BGRA bytes, which matches QImage.Format_ARGB32 byte-for-byte on little-endian.
-PIXEL_FORMAT = QImage.Format_ARGB32
-BLEND_FORMAT = QImage.Format_ARGB32_Premultiplied
+PIXEL_FORMAT = QImage.Format.Format_ARGB32
+BLEND_FORMAT = QImage.Format.Format_ARGB32_Premultiplied
 
 # Ceiling on the stroke accumulator (pixel count) to bound worst-case memory
 # use -- a Format_ARGB32_Premultiplied buffer this size is ~4 bytes/px, so
@@ -292,8 +292,8 @@ def _ensure_accumulator(state, doc_bounds):
         return False
     if w * h > MAX_ACCUMULATOR_PIXELS:
         return False
-    state._acc_image = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
-    state._acc_image.fill(Qt.transparent)
+    state._acc_image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+    state._acc_image.fill(Qt.GlobalColor.transparent)
     state._acc_left = doc_bounds.x()
     state._acc_top = doc_bounds.y()
     state._acc_bounds = None
@@ -322,11 +322,11 @@ def _build_soft_circle(size, hardness, opacity_pct):
     if cached is not None:
         return cached
 
-    img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
-    img.fill(Qt.transparent)
+    img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(Qt.GlobalColor.transparent)
     painter = QPainter(img)
-    painter.setRenderHint(QPainter.Antialiasing, True)
-    painter.setPen(Qt.NoPen)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setPen(Qt.PenStyle.NoPen)
 
     radius = size / 2.0
     alpha_val = max(0, min(255, int(255 * opacity_pct / 100.0)))
@@ -379,7 +379,7 @@ def _paint_dab_to_accumulator(state, dst_center, size, hardness, opacity_pct):
                      clip.width(), clip.height())
 
     painter = QPainter(state._acc_image)
-    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
     painter.drawImage(clip.topLeft(), circle, src_clip)
     painter.end()
     return True
@@ -518,8 +518,8 @@ def preview_patch(state, cursor_doc_pos, doc_size):
     if clip.isEmpty():
         return None
 
-    patch = QImage(doc_size, doc_size, QImage.Format_ARGB32_Premultiplied)
-    patch.fill(Qt.transparent)
+    patch = QImage(doc_size, doc_size, QImage.Format.Format_ARGB32_Premultiplied)
+    patch.fill(Qt.GlobalColor.transparent)
     sub = state._source_snapshot.copy(clip)
     painter = QPainter(patch)
     painter.drawImage(clip.x() - local_x, clip.y() - local_y, sub)
@@ -632,13 +632,13 @@ def finalize_stroke(doc, state):
 
     # Step 1: multiply source by mask alpha (DestinationIn).
     painter = QPainter(src_image)
-    painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
     painter.drawImage(0, 0, mask_image)
     painter.end()
 
     # Step 2: composite masked source over destination (SourceOver).
     painter = QPainter(dst_image)
-    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
     painter.drawImage(0, 0, src_image)
     painter.end()
 
