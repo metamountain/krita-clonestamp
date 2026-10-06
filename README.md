@@ -12,7 +12,7 @@ A Photoshop-style Clone Stamp for [Krita](https://krita.org), for anyone who pai
 
 | Your Krita | Download | What you get |
 | --- | --- | --- |
-| **6.0.4 / 6.0.4.1, Windows x64** | **[Release v2.1.2](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.2)** (`clonestamp_tool-krita-6.0.4-windows-x64.zip`, import as Python plugin) | Native C++ tool with a real toolbox icon — **recommended** |
+| **6.0.4 / 6.0.4.1, Windows x64** | **[Release v2.1.3](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.3)** (`clonestamp_tool-krita-6.0.4-windows-x64.zip`, import as Python plugin) | Native C++ tool with a real toolbox icon — **recommended** |
 | 5.x | [Release v1.0.2-krita5](https://github.com/metamountain/krita-clonestamp/releases/tag/v1.0.2-krita5) | Old Python plugin (docker), not maintained — see [below](#krita-5x-legacy-not-maintained) |
 | other 6.x | not yet — each Krita version needs its own build; please [open an issue](https://github.com/metamountain/krita-clonestamp/issues) | |
 
@@ -22,11 +22,13 @@ The complete Krita 5 era of this project is preserved on the [`krita-5`](https:/
 
 Works on **Krita 6.0.4.x on Windows x64** only.
 
-1. Download **`clonestamp_tool-krita-6.0.4-windows-x64.zip`** from [Release v2.1.2](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.2). Do not unzip it.
+1. Download **`clonestamp_tool-krita-6.0.4-windows-x64.zip`** from [Release v2.1.3](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.3). Do not unzip it.
 2. In Krita: **Tools › Scripts › Import Python Plugin from File...**, select the zip, answer **Yes** to enable the plugin.
 3. Restart Krita. The tool appears in the toolbox next to **Smart Patch** (stamp icon).
 
-**Updating from v2.1.1 or older:** close Krita, delete the folder `%APPDATA%\krita\pykrita\clonestamp_tool`, start Krita, then import the new zip. (Older versions keep their library locked while Krita runs; from v2.1.2 on, you can simply import a newer zip over the installed one and restart.)
+**Updates:** **Tools › Scripts › Clone Stamp: Check for Updates** finds, downloads and installs the newest version for your Krita (then restart Krita).
+
+**Updating from v2.1.1 or older:** close Krita, delete the folder `%APPDATA%\krita\pykrita\clonestamp_tool`, start Krita, then import the new zip. (Older versions keep their library locked while Krita runs; from v2.1.2 on, you can simply import a newer zip over the installed one and restart; from v2.1.3 on, use the update menu.)
 
 On any other Krita version the plugin refuses to load and tells you so. Uninstall: disable or delete `clonestamp_tool` in **Settings › Configure Krita › Python Plugin Manager**.
 

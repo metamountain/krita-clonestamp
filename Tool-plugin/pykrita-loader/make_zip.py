@@ -19,5 +19,6 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     z.write(os.path.join(here, "clonestamp_tool.desktop"), "clonestamp_tool.desktop")
     z.write(os.path.join(here, "clonestamp_tool", "__init__.py"), "clonestamp_tool/__init__.py")
     z.write(os.path.join(here, "clonestamp_tool", "manual.html"), "clonestamp_tool/manual.html")
+    z.write(os.path.join(here, "clonestamp_tool", "updater.py"), "clonestamp_tool/updater.py")
     z.write(dll, "clonestamp_tool/lib/kritatoolclonestamp.dll")
 print(out)

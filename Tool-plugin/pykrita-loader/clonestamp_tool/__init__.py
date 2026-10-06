@@ -17,6 +17,7 @@ from krita import Extension, Krita
 
 # The DLL is binary-locked to the Krita build it was compiled against.
 SUPPORTED_VERSIONS = ("6.0.4",)  # 6.0.4 and 6.0.4.x
+VERSION = "2.1.3"  # this release; the updater compares it with the latest GitHub release
 DLL_NAME = "kritatoolclonestamp.dll"
 
 
@@ -98,7 +99,16 @@ class CloneStampLoader(Extension):
         pass
 
     def createActions(self, window):
-        pass
+        # Tools > Scripts > Clone Stamp: Check for Updates
+        action = window.createAction("clonestamp_check_updates",
+                                     "Clone Stamp: Check for Updates", "tools/scripts")
+        action.triggered.connect(self._check_updates)
+
+    def _check_updates(self):
+        from . import updater
+        win = Krita.instance().activeWindow()
+        updater.run_interactive(VERSION, Krita.instance().version(), Path(__file__).parent,
+                                win.qwindow() if win else None)
 
 
 Krita.instance().addExtension(CloneStampLoader(Krita.instance()))
