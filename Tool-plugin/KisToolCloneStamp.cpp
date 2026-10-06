@@ -811,6 +811,12 @@ void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
 void KisToolCloneStamp::beginPrimaryAction(KoPointerEvent *event)
 {
     const QPointF pixelPoint = convertToPixelCoord(event);
+    if (m_altSamples && (event->modifiers() & Qt::AltModifier)) {
+        m_altSampling = true;
+        sampleSource(pixelPoint);
+        updateOutline(pixelPoint);
+        return;
+    }
     beginStroke(pixelPoint);
     if (m_isPainting) {
         strokeTo(pixelPoint, event->pressure());
@@ -821,7 +827,7 @@ void KisToolCloneStamp::beginPrimaryAction(KoPointerEvent *event)
 
 void KisToolCloneStamp::continuePrimaryAction(KoPointerEvent *event)
 {
-    if (!m_isPainting) {
+    if (m_altSampling || !m_isPainting) {
         return;
     }
     const QPointF pixelPoint = convertToPixelCoord(event);
@@ -832,6 +838,10 @@ void KisToolCloneStamp::continuePrimaryAction(KoPointerEvent *event)
 void KisToolCloneStamp::endPrimaryAction(KoPointerEvent *event)
 {
     Q_UNUSED(event);
+    if (m_altSampling) {
+        m_altSampling = false;
+        return;
+    }
     if (m_isPainting) {
         flushComposite();
         m_isPainting = false;
@@ -1091,6 +1101,10 @@ QWidget *KisToolCloneStamp::createOptionWidget()
                                      m_airbrush = on;
                                      syncOptionWidgets();
                                  });
+    toggleRow->addWidget(smallCheck(i18n("Alt-click"), m_altSamples,
+                                    i18n("Alt+click also sets the source (Photoshop habit). "
+                                         "Ctrl+click always works."),
+                                    [this](bool on) { m_altSamples = on; }));
     toggleRow->addWidget(m_randomAngleCheck);
     toggleRow->addWidget(m_airbrushCheck);
     toggleRow->addWidget(new QLabel(i18n("Pressure:")));

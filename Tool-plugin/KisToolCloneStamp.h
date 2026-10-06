@@ -184,6 +184,11 @@ private:
     // fixed after the first stroke and reused by every later stroke; when
     // false, each new stroke resamples from the original source point.
     bool m_aligned {true};
+    // Photoshop habit: Alt+click sets the source too. Plain Alt+left click
+    // is unbound in Krita's default canvas input profile, so it reaches
+    // beginPrimaryAction with the Alt modifier set.
+    bool m_altSamples {true};
+    bool m_altSampling {false};     // current press was an Alt+click sample
     QPointF m_strokeOffset;
     bool m_hasStrokeOffset {false};
 

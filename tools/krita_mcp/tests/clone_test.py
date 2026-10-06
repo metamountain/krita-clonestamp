@@ -16,7 +16,8 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 
 DEPTH = globals().get("DEPTH", "U16")
-MIRROR = globals().get("MIRROR", False)   # red on the right, sample right, paint left
+MIRROR = globals().get("MIRROR", False)
+ALT = globals().get("ALT", False)       # sample with Alt+click instead of Ctrl+click   # red on the right, sample right, paint left
 W, H = 400, 300
 k = Krita.instance()
 win = k.activeWindow()
@@ -51,7 +52,7 @@ ri = realinput.RealInput(view, cw)
 ri.raise_krita()
 
 SX, DX = (300, 100) if MIRROR else (100, 300)
-ri.click(SX, 150, ctrl=True)                                # source on red
+ri.click(SX, 150, ctrl=not ALT, alt=ALT)                                # source on red
 ri.drag([(DX + i * 4, 150) for i in range(11)])             # stroke on gray
 doc.waitForDone()
 ri.pump(0.3)
@@ -66,6 +67,6 @@ def read(x, y):
 gray = (round(half / one, 3),) * 3 + (1.0,)
 center = read(DX + 20, 150)
 outside = read(DX + 20, 20)
-print(f"mirror={MIRROR} depth={DEPTH}  stroke center={center}  untouched={outside}")
+print(f"alt={ALT} mirror={MIRROR} depth={DEPTH}  stroke center={center}  untouched={outside}")
 ok = center[0] > 0.9 and center[1] < 0.1 and outside == gray
 print("RESULT:", "PASS" if ok else "FAIL")

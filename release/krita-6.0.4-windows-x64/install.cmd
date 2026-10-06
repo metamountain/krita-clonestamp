@@ -31,9 +31,11 @@ net session >nul 2>&1 || (
   exit /b
 )
 
-rem A running Krita locks the DLL against overwriting, but it may be renamed.
-del /f /q "%PLUG%\kritatoolclonestamp.dll.old*" 2>nul
-if exist "%PLUG%\kritatoolclonestamp.dll" ren "%PLUG%\kritatoolclonestamp.dll" "kritatoolclonestamp.dll.old%RANDOM%"
+rem A running Krita locks the DLL against overwriting, but it can be moved.
+rem Move it OUT of kritaplugins: Krita loads every file in that folder, whatever
+rem its extension, so a renamed copy left there would still register.
+del /f /q "%PLUG%\kritatoolclonestamp.dll.*" 2>nul
+if exist "%PLUG%\kritatoolclonestamp.dll" move /y "%PLUG%\kritatoolclonestamp.dll" "%TEMP%\kritatoolclonestamp-old-%RANDOM%.dll" >nul
 copy /y "%HERE%kritatoolclonestamp.dll" "%PLUG%\kritatoolclonestamp.dll" >nul || (
   echo Copy failed. & pause & exit /b 1
 )

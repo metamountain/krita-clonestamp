@@ -18,7 +18,7 @@ port for Krita 5.x is kept alongside it.
 
 | Your Krita | Download | What you get |
 | --- | --- | --- |
-| **6.0.4 / 6.0.4.1, Windows x64** | **[Release v2.0.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.0.0)** (`clonestamp_tool-krita-6.0.4-windows-x64.zip`, import as Python plugin) | Native C++ tool with a real toolbox icon — **recommended** |
+| **6.0.4 / 6.0.4.1, Windows x64** | **[Release v2.1.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.0)** (`clonestamp_tool-krita-6.0.4-windows-x64.zip`, import as Python plugin) | Native C++ tool with a real toolbox icon — **recommended** |
 | 5.x | [Release v1.0.2-krita5](https://github.com/metamountain/krita-clonestamp/releases/tag/v1.0.2-krita5) or [clonestamp.zip](https://github.com/metamountain/krita-clonestamp/raw/main/python-plugin/clonestamp.zip) | Python plugin (docker), see [below](#python-plugin-krita-5x) |
 | other 6.x | not yet — each Krita version needs its own build; please [open an issue](https://github.com/metamountain/krita-clonestamp/issues) | |
 
@@ -37,7 +37,7 @@ Preview").
 **Recommended — like any Python plugin, no admin rights:**
 
 1. Download **`clonestamp_tool-krita-6.0.4-windows-x64.zip`** from
-   [Release v2.0.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.0.0)
+   [Release v2.0.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.0)
    (do not unzip it).
 2. In Krita: **Tools › Scripts › Import Python Plugin from File...**, select
    the zip, answer **Yes** to enabling the plugin.
@@ -65,7 +65,7 @@ delete that DLL. Both ways can coexist; the tool registers only once.
 ### Features
 
 **Sampling**
-- **Ctrl+click** sets the source point; the source is frozen as a
+- **Ctrl+click** — or **Alt+click**, the Photoshop habit (switchable) — sets the source point; the source is frozen as a
   copy-on-write snapshot, so strokes that cross their own source clone the
   *original* pixels, never freshly painted ones (Photoshop behavior).
 - **Sample: Current Layer / All Layers** — toggle buttons at the top of the
@@ -124,11 +124,16 @@ delete that DLL. Both ways can coexist; the tool registers only once.
 
 | Action | Gesture |
 | --- | --- |
-| Set the source point | **Ctrl+click** on the canvas |
+| Set the source point | **Ctrl+click** or **Alt+click** on the canvas |
 | Paint (live while dragging) | **Click and drag** |
 | Resize brush / adjust hardness | **Shift+drag** (horizontal / vertical) |
 | Switch sample source | **Current Layer / All Layers** buttons (Tool Options) |
 | Quick brush setup | Preset buttons **Hard · Soft · Square · Painterly · Airbrush** |
+
+> **Custom key for sampling:** the tool follows Krita's *Sample foreground color from
+> merged image* binding, so you can move Ctrl+click to any key in *Settings › Configure
+> Krita › Canvas Input Settings › Alternate Invocation* (this also changes color
+> sampling for the other tools).
 
 ### Options reference (Tool Options docker)
 
@@ -150,6 +155,7 @@ delete that DLL. Both ways can coexist; the tool registers only once.
 | Rnd angle | on/off | Random rotation per dab |
 | Airbrush | on/off | Build up while the button is held |
 | Pressure: Size / Flow | on/off | Pen pressure controls size and/or flow |
+| Alt-click | on/off | Alt+click also sets the source (Ctrl+click always works) |
 
 ## Python plugin (Krita 5.x)
 

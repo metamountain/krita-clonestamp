@@ -74,3 +74,17 @@ the Alt trick left a "running" shortcut and the next `addView` crashed in
 Evidence: `D:\_Code\Krita	ools\krita_mcp	ests
 Evidence: `D:/_Code/Krita/tools/krita_mcp/tests/realinput.py`, brush_tests.py 6/6 (2026-10-06);
 kritacrash.log 2026-10-06 12:05 and 12:27.
+
+### Krita loads EVERY file in lib/kritaplugins, whatever its extension
+A DLL renamed to `kritatoolclonestamp.dll.disabled` (or `.old123`) inside `kritaplugins` is
+still loaded and registers its tool -- an old copy then wins over a new one (registration is
+first-come). To replace a locked DLL, MOVE it out of the folder (e.g. to %TEMP%, same volume),
+never rename it in place. Disable a plugin by moving it out, not by renaming.
+Evidence: 2026-10-06, `(Get-Process krita).Modules` listed
+`...\kritaplugins\kritatoolclonestamp.dll.disabled` as loaded; Alt-click option missing in UI.
+
+### Plain Alt+left click reaches the tool
+Krita's default canvas input profile binds Ctrl+click, Shift+drag, Ctrl+Alt+click, but not plain
+Alt+left click, so it arrives in `beginPrimaryAction` with `Qt::AltModifier` set -- usable for
+tool-specific gestures (Clone Stamp: Alt+click sets the source).
+Evidence: `krita/data/input/kritadefault.profile`; clone_test.py ALT=True PASS (U8, U16).

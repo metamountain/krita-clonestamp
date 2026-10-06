@@ -6,7 +6,10 @@ rem   deploy-tool.cmd [path\to\kritatoolclonestamp.dll]   (default: %KRITA_DEV%\
 set PLUG=C:\Program Files\Krita (x64)\lib\kritaplugins
 if "%KRITA_DEV%"=="" set KRITA_DEV=D:\_Code\Krita\dev
 if "%~1"=="" (set NEW=%KRITA_DEV%\build68\bin\kritatoolclonestamp.dll) else (set NEW=%~1)
-del /f /q "%PLUG%\kritatoolclonestamp.dll.old*" 2>nul
-if exist "%PLUG%\kritatoolclonestamp.dll" ren "%PLUG%\kritatoolclonestamp.dll" "kritatoolclonestamp.dll.old%RANDOM%"
+rem A running Krita locks the DLL against overwriting, but it can be moved.
+rem Move it OUT of kritaplugins: Krita loads every file in that folder, whatever
+rem its extension, so a renamed copy left there would still register.
+del /f /q "%PLUG%\kritatoolclonestamp.dll.*" 2>nul
+if exist "%PLUG%\kritatoolclonestamp.dll" move /y "%PLUG%\kritatoolclonestamp.dll" "%TEMP%\kritatoolclonestamp-old-%RANDOM%.dll" >nul
 copy /y "%NEW%" "%PLUG%\kritatoolclonestamp.dll" || (echo COPY FAILED & exit /b 1)
 echo DEPLOY OK

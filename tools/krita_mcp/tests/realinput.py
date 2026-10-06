@@ -72,15 +72,21 @@ class RealInput:
         user32.SetCursorPos(*self.screen_pt(x, y))
         self.pump(settle)
 
-    def click(self, x, y, ctrl=False):
+    def click(self, x, y, ctrl=False, alt=False):
         self.move(x, y, 0.1)
         if ctrl:
             user32.keybd_event(VK_CONTROL, 0, 0, 0)
+            self.pump(0.1)
+        if alt:
+            user32.keybd_event(VK_MENU, 0, 0, 0)
             self.pump(0.1)
         user32.mouse_event(LDOWN, 0, 0, 0, 0)
         self.pump(0.08)
         user32.mouse_event(LUP, 0, 0, 0, 0)
         self.pump(0.08)
+        if alt:
+            user32.keybd_event(VK_MENU, 0, KEYUP, 0)
+            self.pump(0.1)
         if ctrl:
             user32.keybd_event(VK_CONTROL, 0, KEYUP, 0)
             self.pump(0.1)
