@@ -49,8 +49,10 @@ Evidence: krita-src `build-tools/ci-scripts/windows.yml`; commit 5abff03 "Switch
 transition.now/qt6.8.0"; `D:\_Code\Krita\dev\build-krita.bat`.
 
 ### Replacing a loaded plugin DLL
-Windows locks loaded DLLs against overwrite but allows rename: rename to `.old`, copy new, restart
-Krita. Program Files needs elevation. Evidence: `D:\_Code\Krita\dev\deploy-tool.cmd`.
+Windows locks a loaded DLL against overwrite but allows rename/move. In the plugin's own
+pykrita folder (`clonestamp_tool\lib\`) renaming the old file aside is fine -- the loader only
+loads the exact file name. Never do that inside `lib\kritaplugins` (see next entry). Restart
+Krita afterwards. Evidence: 2026-10-06 deploys into `%APPDATA%\krita\pykrita\clonestamp_tool\lib`.
 
 ### Tool icons from a plugin
 `setIconName(koIconNameCStr("name"))` resolves `:/pics/dark_name.svg` / `:/pics/light_name.svg`

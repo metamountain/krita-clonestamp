@@ -37,8 +37,8 @@ not load:
 - Build only the target **`kritatoolclonestamp`** (~1600 steps the first
   time, minutes afterwards).
 
-Scripts: `windows/build-krita.bat` (env vars `KRITA_DEV`, `KRITA_SRC`) and
-`windows/deploy-tool.cmd`.
+Script: `windows/build-krita.bat` (env vars `KRITA_DEV`, `KRITA_SRC`). Package with
+`pykrita-loader/make_zip.py`, check with `../tools/check_plugin_zip.py`.
 
 To add the plugin to a Krita source checkout: put these files in
 `krita-src/plugins/tools/tool_clonestamp/` and add one line to

@@ -165,7 +165,7 @@ branch. Its *Check for Updates* button reports an error since its files left
 | `Tool-plugin/` | The native C++ `KisTool` implementation — the flagship product. |
 | `release/` | The release zip per Krita version (currently `krita-6.0.4-windows-x64/clonestamp_tool-krita-6.0.4-windows-x64.zip`). |
 | `Tool-plugin/pykrita-loader/` | The Python loader plugin (`clonestamp_tool`) packaged with the DLL into the importable zip. |
-| `Tool-plugin/windows/` | Developer scripts: `build-krita.bat`, `deploy-tool.cmd` (copies a dev build into a local Krita). |
+| `Tool-plugin/windows/` | `build-krita.bat` — builds the tool DLL against Krita 6.0.4. |
 | `tools/krita_mcp/` | Automated test harness — an MCP bridge (`kritamcp` plugin + `krita_mcp.py` server + `kcall.py` CLI) and the test scripts. |
 | `docs/` | Development history, build/toolchain notes, per-change test documentation, and `krita-pitfalls.md` (verified pitfalls with evidence). |
 

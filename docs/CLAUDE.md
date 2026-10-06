@@ -83,7 +83,7 @@ depths/color spaces, brush tips, presets, pressure, and airbrush.
    loader loads the DLL from its own folder (no admin, nothing in the Krita
    install). There is exactly one zip per supported Krita version. Do not
    put the DLL into `lib\kritaplugins` (Krita loads every file there, even
-   renamed ones). `deploy-tool.cmd` is a developer convenience only. Don't ship debug logging enabled — it does
+   renamed ones). Don't ship debug logging enabled — it does
    file I/O per stroke tick and is gated behind a `%TEMP%` sentinel file
    for that reason.
 
