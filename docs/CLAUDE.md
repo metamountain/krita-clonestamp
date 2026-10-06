@@ -39,8 +39,8 @@ depths/color spaces, brush tips, presets, pressure, and airbrush.
 | This repository | C++ tool source, Python plugin source + zip, `release/` prebuilt DLL, docs. |
 | `D:\_Code\Krita\krita-src\` | Full Krita source checkout (tag `v6.0.4.1`). The C++ tool builds there as `plugins\tools\tool_clonestamp\` — copy changed files from `Tool-plugin/` into it, then `cmake --build D:\_Code\Krita\dev\build68 --target kritatoolclonestamp`. |
 | `D:\_Code\Krita\dev\` | Build environment: `env68/` (fetched deps + `base-env.bat`), `cmake-3.31.8`, `ninja`, `build68/` (build tree), `install68/` (install tree). |
-| `C:\Program Files\Krita (x64)\` | The official Krita 6.0.4 installation the flagship DLL is deployed into (via `deploy-tool.cmd` / `install.cmd`). |
-| `%APPDATA%\krita\pykrita\clonestamp\` | The *installed* Python plugin — a separate copy, not this repo. Krita loads Python plugins only at startup. |
+| `%APPDATA%\krita\pykrita\clonestamp_tool\` | The installed tool (loader + `lib\kritatoolclonestamp.dll`), as end users get it from the plugin zip. Developer deploy: replace the DLL in `lib\` (rename the loaded one aside, no admin needed), restart Krita. |
+| `C:\Program Files\Krita (x64)\` | The official Krita 6.0.4. Keep `lib\kritaplugins\` free of clonestamp files: Krita loads every file there, any extension, and an old copy would win. |
 
 ## Hard rules
 
@@ -78,15 +78,12 @@ depths/color spaces, brush tips, presets, pressure, and airbrush.
    Python change locally, copy the folder over the installed copy, delete
    its `__pycache__`, restart Krita, and verify the docker shows the new
    version.
-5. **Deploying to the official install is deliberate and minimal.** The
-   official Krita 6.0.4 at `C:\Program Files\Krita (x64)` is the target of
-   the flagship DLL — and the *only* file ever placed there is
-   `kritatoolclonestamp.dll`, via `Tool-plugin/windows/deploy-tool.cmd`
-   (developer) or `release/.../install.cmd` (end user). A running Krita
-   locks a loaded DLL against overwrite but allows rename, so the scripts
-   rename the old DLL to `.old` and copy the new one in (takes effect at the
-   next start; needs admin for `Program Files`). Nothing else in the
-   official install is touched. Don't ship debug logging enabled — it does
+5. **One distribution: the plugin zip.** End users install
+   `clonestamp_tool-<krita>-windows-x64.zip` via Import Python Plugin; the
+   loader loads the DLL from its own folder (no admin, nothing in the Krita
+   install). There is exactly one zip per supported Krita version. Do not
+   put the DLL into `lib\kritaplugins` (Krita loads every file there, even
+   renamed ones). `deploy-tool.cmd` is a developer convenience only. Don't ship debug logging enabled — it does
    file I/O per stroke tick and is gated behind a `%TEMP%` sentinel file
    for that reason.
 
@@ -138,7 +135,7 @@ because Qt/sip objects can already be deleted when callbacks fire.
   deleted. Version numbering was restarted at **1.0** on 2026-07-19 — the
   1.x.y prototype history up to 1.7.1 predates the restart (see the change
   report).
-- **Installer-zip idea (Acly model) — the next step** (investigated
+- **Installer-zip (Acly model) — DONE in v2.1.1** (`Tool-plugin/pykrita-loader/`, loads the DLL via ctypes; no copy step needed). Original notes: (investigated
   2026-07-19, studying `Acly/krita-ai-tools`'s distribution model): that
   project ships a real native `KisTool` as a per-platform, per-Krita-version
   release zip, installed through the ordinary **Import Python Plugin from

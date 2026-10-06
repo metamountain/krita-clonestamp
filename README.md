@@ -34,8 +34,6 @@ Preview").
 
 ### Installation (Krita 6.0.4, Windows x64)
 
-**Recommended — like any Python plugin, no admin rights:**
-
 1. Download **`clonestamp_tool-krita-6.0.4-windows-x64.zip`** from
    [Release v2.1.1](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.1)
    (do not unzip it).
@@ -51,12 +49,6 @@ registers the tool — the same model as Acly's
 Krita version it refuses to load and tells you so. Uninstall: disable or
 delete `clonestamp_tool` in **Settings › Configure Krita › Python Plugin
 Manager**.
-
-**Alternative — system-wide with `install.cmd`:** download
-`clonestamp-krita-6.0.4-windows-x64.zip`, unzip, run `install.cmd` (checks
-the Krita version, asks for admin rights, copies `kritatoolclonestamp.dll`
-into `C:\Program Files\Krita (x64)\lib\kritaplugins\`). Uninstall:
-delete that DLL. Both ways can coexist; the tool registers only once.
 
 > **Krita 6.0.4.x on Windows x64 only.** A compiled Krita plugin is
 > binary-locked to the Krita build it was compiled against (here: Qt 6.8,
@@ -171,9 +163,9 @@ branch. Its *Check for Updates* button reports an error since its files left
 | Path | Contents |
 | --- | --- |
 | `Tool-plugin/` | The native C++ `KisTool` implementation — the flagship product. |
-| `release/` | Prebuilt per-Krita-version release folders (currently `krita-6.0.4-windows-x64/` with `install.cmd` + the DLL). |
+| `release/` | The release zip per Krita version (currently `krita-6.0.4-windows-x64/clonestamp_tool-krita-6.0.4-windows-x64.zip`). |
 | `Tool-plugin/pykrita-loader/` | The Python loader plugin (`clonestamp_tool`) packaged with the DLL into the importable zip. |
-| `Tool-plugin/windows/` | Windows build/deploy scripts (`build-krita.bat`, `deploy-tool.cmd`). |
+| `Tool-plugin/windows/` | Developer scripts: `build-krita.bat`, `deploy-tool.cmd` (copies a dev build into a local Krita). |
 | `tools/krita_mcp/` | Automated test harness — an MCP bridge (`kritamcp` plugin + `krita_mcp.py` server + `kcall.py` CLI) and the test scripts. |
 | `docs/` | Development history, build/toolchain notes, per-change test documentation, and `krita-pitfalls.md` (verified pitfalls with evidence). |
 

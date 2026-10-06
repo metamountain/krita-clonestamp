@@ -7,8 +7,9 @@ added as a subdirectory of Krita's own source tree.
 
 The tool is **installable**: a prebuilt `kritatoolclonestamp.dll` for the
 official Krita 6.0.4 Windows x64 build ships in
-`../release/krita-6.0.4-windows-x64/` and is installed with `install.cmd`
-(see the README). It appears in the toolbox next to **Smart Patch**. The DLL
+`../release/krita-6.0.4-windows-x64/` as `clonestamp_tool-krita-6.0.4-windows-x64.zip`,
+installed via Tools › Scripts › Import Python Plugin from File (see the README;
+built with `pykrita-loader/make_zip.py`, verified with `../tools/check_plugin_zip.py`). It appears in the toolbox next to **Smart Patch**. The DLL
 is ABI-locked to that exact Krita build (Qt 6.8), so it fits **only** Krita
 6.0.4.x on Windows x64 and every new Krita version needs a rebuild. This is
 also the **upstream-submission candidate** (a real toolbox icon).
