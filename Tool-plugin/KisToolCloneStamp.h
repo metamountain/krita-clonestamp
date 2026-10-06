@@ -241,10 +241,10 @@ public:
     {
         setToolTip(i18n("Clonestamp Tool with Preview"));
         setSection(ToolBoxSection::Fill);
-        // 3 collided with tool_lazybrush's Colorize Mask Tool (also 3),
-        // producing two icon slots that look identical if the icon is also
-        // borrowed -- 5 is free between Smart Patch (4) and Fill (14).
-        setPriority(5);
+        // Last in the Fill section, where it is easy to spot: built-in Fill
+        // tools use priorities 0-15, plugin tools (e.g. Smart Fill) may add
+        // more, so 100 keeps the stamp at the end.
+        setPriority(100);
         setIconName(koIconNameCStr("krita_tool_clonestamp"));
         setActivationShapeId(KRITA_TOOL_ACTIVATION_ID);
     }

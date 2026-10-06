@@ -103,3 +103,27 @@ gc.bitBlt(dstPt, srcDevice, srcRect);` -- the selection (alpha mask, `KisSelecti
 `pixelSelection()->writeBytes`) masks the copy, KisPainter converts color spaces and works for
 8/16-bit integer and float. Restore an area first with `KisPainter::copyAreaOptimized`.
 Evidence: `KisToolCloneStamp::compositeLive`; clone_test.py PASS for U8/U16/F32.
+
+### Tools registered after startup get no toolbox button
+When the tool DLL is loaded via the ctypes loader (Python plugin `clonestamp_tool`), the tool
+action is registered but the toolbox has **no button** (measured: 0 buttons with objectName
+"KritaShape/KisToolCloneStamp"). Cause: `KoToolManager` builds its `toolActionList` once from
+`KoToolRegistry` before Python plugins run; `KoToolBox` (`libs/ui/toolbox/KoToolBox.cpp:105`)
+creates its buttons from that list. Fix: `load_clonestamp_plugin()` calls `injectToolboxAction()`,
+which grabs `KoToolManager::instance()->priv()` and appends a `new KoToolAction(factory)` to
+`Private::toolActionList` -- but only if no action with id "KritaShape/KisToolCloneStamp" is present
+yet (duplicate guard). Same approach as Acly's krita-vision-tools (`injectTools`). Needs
+`KoToolManager_p.h` (Krita source tree, not installed); `priv()`, `KoToolAction(KoToolFactoryBase*)`
+and `KoToolAction::id()` are exported from `libkritaflake.dll` of Krita 6.0.4 (checked with
+llvm-readobj). First found by Qwen (fix.md).
+Evidence: `ClonestampToolPlugin.cpp` injectToolboxAction; `KoToolBox.cpp:105`; measured 0 buttons 2026-10-06.
+
+### Plugin DLLs in pykrita folders: load a copy, not the original
+Re-importing/updating the plugin zip while Krita runs failed: Krita's importer
+(`plugin_importer.py`, `extract_module`) does `shutil.rmtree` on the old plugin folder, but the
+already-loaded DLL in `clonestamp_tool/lib` is locked by Windows -> `PermissionError [WinError 5]`
+(reproduced). Fix: the loader never loads the file inside the plugin folder but a copy at
+`%LOCALAPPDATA%\clonestamp_tool\kritatoolclonestamp-<sha1-12>.dll` (`_shadow_copy` in
+`Tool-plugin/pykrita-loader/clonestamp_tool/__init__.py`); stale copies are deleted once no longer
+locked. The update takes effect after a Krita restart.
+Evidence: `plugin_importer.py` extract_module rmtree; PermissionError reproduced 2026-10-06; loader `_shadow_copy`.
