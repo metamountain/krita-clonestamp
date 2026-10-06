@@ -7,8 +7,8 @@ stroke. Krita has no native equivalent of this tool today; this project adds
 one.
 
 The main product is a **native C++ tool** that installs into the official
-Krita 6.0.4 Windows build and appears as a real toolbox icon. A pure-Python
-port for Krita 5.x is kept alongside it.
+Krita 6.0.4 Windows build and appears as a real toolbox icon. An older pure-Python
+version for Krita 5.x is archived (not maintained).
 
 ![Clone Stamp in Krita 6.0.4](docs/demo-krita6.webp)
 
@@ -18,8 +18,8 @@ port for Krita 5.x is kept alongside it.
 
 | Your Krita | Download | What you get |
 | --- | --- | --- |
-| **6.0.4 / 6.0.4.1, Windows x64** | **[Release v2.1.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.0)** (`clonestamp_tool-krita-6.0.4-windows-x64.zip`, import as Python plugin) | Native C++ tool with a real toolbox icon — **recommended** |
-| 5.x | [Release v1.0.2-krita5](https://github.com/metamountain/krita-clonestamp/releases/tag/v1.0.2-krita5) or [clonestamp.zip](https://github.com/metamountain/krita-clonestamp/raw/main/python-plugin/clonestamp.zip) | Python plugin (docker), see [below](#python-plugin-krita-5x) |
+| **6.0.4 / 6.0.4.1, Windows x64** | **[Release v2.1.1](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.1)** (`clonestamp_tool-krita-6.0.4-windows-x64.zip`, import as Python plugin) | Native C++ tool with a real toolbox icon — **recommended** |
+| 5.x | [Release v1.0.2-krita5](https://github.com/metamountain/krita-clonestamp/releases/tag/v1.0.2-krita5) | Old Python plugin (docker), not maintained — see [below](#krita-5x-legacy-not-maintained) |
 | other 6.x | not yet — each Krita version needs its own build; please [open an issue](https://github.com/metamountain/krita-clonestamp/issues) | |
 
 The complete Krita 5 era of this project is preserved on the
@@ -37,7 +37,7 @@ Preview").
 **Recommended — like any Python plugin, no admin rights:**
 
 1. Download **`clonestamp_tool-krita-6.0.4-windows-x64.zip`** from
-   [Release v2.1.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.0)
+   [Release v2.1.1](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.1)
    (do not unzip it).
 2. In Krita: **Tools › Scripts › Import Python Plugin from File...**, select
    the zip, answer **Yes** to enabling the plugin.
@@ -157,49 +157,14 @@ delete that DLL. Both ways can coexist; the tool registers only once.
 | Pressure: Size / Flow | on/off | Pen pressure controls size and/or flow |
 | Alt-click | on/off | Alt+click also sets the source (Ctrl+click always works) |
 
-## Python plugin (Krita 5.x)
+## Krita 5.x (legacy, not maintained)
 
-![Python plugin demo](docs/preview.gif)
-
-A pure-Python implementation on Krita's `libkis` scripting API. It **works
-on Krita 5.x only** — it uses PyQt5, which Krita 6 does not provide ("not
-compatible with PyQt5"). An untested PyQt6 port exists on the `qt6-port`
-branch.
-
-1. Download **[clonestamp.zip](https://github.com/metamountain/krita-clonestamp/raw/main/python-plugin/clonestamp.zip)**
-   (the ready-to-import plugin package, rebuilt from source on every
-   change — not the whole repository).
-2. In Krita: **Tools › Scripts › Import Python Plugin from File...** and
-   select the downloaded zip.
-3. Restart Krita, then enable the docker under **Settings › Dockers ›
-   Clonestamp Tool with Preview**.
-
-No build step. The installed version is shown at the bottom of the docker;
-*Check for Updates* keeps it current from then on (a restart is required
-after an update, since Krita loads Python plugins only at startup).
-
-### Technical notes and known limitations (Python)
-
-- **Strokes commit at mouse release.** A drag accumulates dabs into an
-  in-memory alpha mask and writes the composited result to the layer once —
-  the only way to get a single undo step through the scripting API, which
-  exposes no undo grouping. The on-canvas preview during the drag is a close
-  approximation; the committed pixels are always computed the exact way. On
-  large canvases this buffer is sizeable (capped at ~800 MB; larger canvases
-  are refused with a message).
-- **Mouse input is polled.** Continuous mouse-move is not exposed to
-  Krita's scripting API, so drags are tracked by polling the cursor at
-  30 ms intervals via a global event filter (a technique adapted from the
-  Krita Artists forum).
-- **The native brush outline is swapped out.** While the brush is enabled,
-  Krita's own brush-outline cursor is toggled off and the plugin draws its
-  own ring cursor instead; if Krita exits abnormally mid-session, that
-  toggle can be left inverted (toggle it back via the `toggle_brush_outline`
-  shortcut or by enabling/disabling the plugin once).
-- **Diagnostics are off by default** (they cost real per-stroke I/O). To
-  enable: create an empty file named `clonestamp_debug.enable` in your
-  `%TEMP%` folder and restart Krita; logs go to `clonestamp_debug.txt`
-  next to it. Delete the file and restart to disable.
+The earlier pure-Python version of this tool (docker-based, PyQt5) works on
+Krita 5.x only and is **no longer developed**. It is preserved as
+[Release v1.0.2-krita5](https://github.com/metamountain/krita-clonestamp/releases/tag/v1.0.2-krita5)
+and on the [`krita-5`](https://github.com/metamountain/krita-clonestamp/tree/krita-5)
+branch. Its *Check for Updates* button reports an error since its files left
+`main` — the installed plugin itself keeps working.
 
 ## Repository layout
 
@@ -209,31 +174,28 @@ after an update, since Krita loads Python plugins only at startup).
 | `release/` | Prebuilt per-Krita-version release folders (currently `krita-6.0.4-windows-x64/` with `install.cmd` + the DLL). |
 | `Tool-plugin/pykrita-loader/` | The Python loader plugin (`clonestamp_tool`) packaged with the DLL into the importable zip. |
 | `Tool-plugin/windows/` | Windows build/deploy scripts (`build-krita.bat`, `deploy-tool.cmd`). |
-| `python-plugin/` | The installable Krita 5.x Python plugin and the packaged `clonestamp.zip`. |
 | `tools/krita_mcp/` | Automated test harness — an MCP bridge (`kritamcp` plugin + `krita_mcp.py` server + `kcall.py` CLI) and the test scripts. |
 | `docs/` | Development history, build/toolchain notes, per-change test documentation, and `krita-pitfalls.md` (verified pitfalls with evidence). |
 
-## Why two implementations?
+## Why a native tool?
 
-Krita's Python scripting API cannot register a new entry in the native
-toolbox — that requires a compiled `KisTool`/`KoToolFactoryBase` built as
-part of Krita itself. The Python plugin works around this with a docker and
-an application-level mouse event filter. The C++ tool is the real toolbox
-icon, and — because a compiled Krita plugin is ABI-locked to the exact Krita
-build it was compiled against — it is now **directly installable for the one
-matching version** (Krita 6.0.4.x on Windows x64) via the `release/` folder
-and `install.cmd`, rather than requiring a build. A new Krita version means
-a rebuilt DLL. The C++ tool is ahead of the Python one: it paints live per
-frame, supports all bit depths/color spaces, brush tips, presets, and
-pressure; the Python plugin remains the Krita 5.x path.
+Krita's Python scripting API cannot add a real tool to the toolbox, receive
+pen pressure, or paint through Krita's own pixel pipeline — the old Python
+version had to work around all of that with a docker and a polled mouse
+filter. This project is therefore **C++ only** now: a compiled
+`KisTool`/`KoToolFactoryBase`. A compiled Krita plugin is binary-locked to the
+Krita build it was compiled against, so each supported Krita version gets its
+own prebuilt release (currently 6.0.4.x, Windows x64). The small
+`clonestamp_tool` loader in the plugin zip contains no tool logic; it only
+loads the native library so the tool installs without admin rights.
 
 ## Project status and contributing
 
 This project was built by **metamountain** — not a professional
 programmer — in AI-assisted pair programming with Claude Code. The C++ tool
 is now backed by an automated test harness (`tools/krita_mcp/`) that drives
-the real mouse against a running Krita; the Python plugin is validated by
-hands-on testing. It works, and it is honest about what it is.
+the real mouse against a running Krita, plus hands-on use. It works, and it
+is honest about what it is.
 
 **If you are an experienced Krita, Qt, or KDE developer**, your review,
 maintenance, or help shepherding the C++ tool through Krita's contribution
@@ -250,8 +212,6 @@ describing what you did and what happened.
 
 - **[Krita](https://krita.org)** and the **KDE community** — the
   application and APIs this project builds on.
-- **Krita Artists forum** — origin of the global-event-filter technique
-  for canvas mouse capture from Python.
 - **[Acly/krita-ai-tools](https://github.com/Acly/krita-ai-tools)** —
   studied as the closest precedent for distributing a Krita plugin with a
   compiled component; its per-Krita-version release packaging informed this
@@ -268,7 +228,6 @@ describing what you did and what happened.
 - Repository overall and `Tool-plugin/`: **GPL-2.0-or-later** (see
   `LICENSE`) — the C++ tool derives from and links against Krita's GPL
   codebase.
-- `python-plugin/`: **CC0-1.0** (public-domain dedication, per the SPDX
-  headers in its files) — deliberately unencumbered.
+- The archived Krita 5 Python plugin (branch `krita-5`): **CC0-1.0**.
 - Toolbox icon: **MIT** (Phosphor Icons "stamp-fill", Copyright (c) 2020
   Phosphor Icons).

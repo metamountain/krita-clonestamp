@@ -5,6 +5,15 @@ this repository. Historical narratives live in the files listed under
 [History](#history-and-deeper-references); this file states what is true
 *now* and the rules that keep the project consistent.
 
+> **Status 2026-10-06: the project is C++ only.** `main` contains the native tool
+> (`Tool-plugin/`), its release packaging and tests. The Python plugin was removed from
+> `main` and lives frozen on branch `krita-5` (release v1.0.2-krita5, not maintained).
+> Rules below that mention `python-plugin/`, `VERSION` or `clonestamp.zip` apply to that
+> branch only. Release checklist for the C++ tool: build (`Tool-plugin/windows/build-krita.bat`),
+> check imports against the installed Krita (llvm-readobj), build the plugin zip with
+> `Tool-plugin/pykrita-loader/make_zip.py`, verify it with `tools/check_plugin_zip.py`, run
+> `tools/krita_mcp/tests` (real mouse -- only with the user's OK), then tag + GitHub release.
+
 ## What this project is
 
 A Photoshop-style Clone Stamp tool for Krita, in two implementations:
