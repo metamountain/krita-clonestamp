@@ -127,3 +127,23 @@ already-loaded DLL in `clonestamp_tool/lib` is locked by Windows -> `PermissionE
 `Tool-plugin/pykrita-loader/clonestamp_tool/__init__.py`); stale copies are deleted once no longer
 locked. The update takes effect after a Krita restart.
 Evidence: `plugin_importer.py` extract_module rmtree; PermissionError reproduced 2026-10-06; loader `_shadow_copy`.
+
+### Plugin zip for Import Python Plugin needs directory entries
+Krita's importer (`plugins/python/plugin_importer/plugin_importer.py`, `get_source_module`) finds
+the module only via an explicit `"<name>/"` directory entry plus `"<name>/__init__.py"` in the zip.
+Python's `zipfile` writes no directory entries by itself, so such a zip unpacks fine but Krita reports
+"No plugins found in archive". Write the entries (`z.writestr("<name>/", "")`) and verify every
+release zip with Krita's own importer code (`tools/check_plugin_zip.py`).
+Evidence: v2.0.0/v2.1.0 zips failed on the user's server; check_plugin_zip.py FAIL→OK 2026-10-06.
+
+### PluginImporter leaves the zip file open
+`PluginImporter(...).import_all()` keeps `self.archive` (a ZipFile) open; deleting the zip right
+after (e.g. a TemporaryDirectory) fails with WinError 32. Call `importer.archive.close()` yourself.
+Evidence: `updater.py install()`, PermissionError reproduced 2026-10-06.
+
+### Updating over an install that locks its DLL cannot be fixed from the new zip
+The importer `rmtree`s the old plugin folder before any code of the new zip runs, so if the
+installed version loaded its DLL straight from that folder (clonestamp v2.1.1 and older), the import
+fails while Krita runs. Only manual steps help: close Krita, delete the plugin folder (or disable the
+plugin and restart), then import. Design loaders to load a copy from the start.
+Evidence: user's server, 2026-10-06 (`C:/Users/blasa/.../clonestamp_tool/lib/kritatoolclonestamp.dll`).

@@ -1,162 +1,127 @@
 # Project guide — Krita Clone Stamp
 
-Orientation document for development sessions (human or AI-assisted) on
-this repository. Historical narratives live in the files listed under
-[History](#history-and-deeper-references); this file states what is true
-*now* and the rules that keep the project consistent.
-
-> **Status 2026-10-06: the project is C++ only.** `main` contains the native tool
-> (`Tool-plugin/`), its release packaging and tests. The Python plugin was removed from
-> `main` and lives frozen on branch `krita-5` (release v1.0.2-krita5, not maintained).
-> Rules below that mention `python-plugin/`, `VERSION` or `clonestamp.zip` apply to that
-> branch only. Release checklist for the C++ tool: build (`Tool-plugin/windows/build-krita.bat`),
-> check imports against the installed Krita (llvm-readobj), build the plugin zip with
-> `Tool-plugin/pykrita-loader/make_zip.py`, verify it with `tools/check_plugin_zip.py`, run
-> `tools/krita_mcp/tests` (real mouse -- only with the user's OK), then tag + GitHub release.
+Orientation for development sessions (human or AI-assisted). This file states
+what is true *now* and the rules that keep the project consistent; history is
+in the files listed at the end.
 
 ## What this project is
 
-A Photoshop-style Clone Stamp tool for Krita, in two implementations:
+A Photoshop-style Clone Stamp for Krita as a **native C++ tool** (`KisTool` +
+`KoToolFactoryBase`). **C++ only** — the old Python plugin is frozen on branch
+`krita-5` (release v1.0.2-krita5, not maintained) and must not be revived on
+`main`.
 
-| Path | What it is | Status |
-| --- | --- | --- |
-| `Tool-plugin/` | Native C++ `KisTool` + `KoToolFactoryBase` — the **flagship**. Real toolbox icon; distributable via the prebuilt `release/` DLL for Krita 6.0.4. | Live, automated-tested (via `tools/krita_mcp/`); ahead of the Python port. |
-| `python-plugin/clonestamp/` | Pure-Python plugin on Krita's `libkis` scripting API. The Krita 5.x path — users install `python-plugin/clonestamp.zip`. | Live, hands-on tested, self-updating. Krita 5.x only (PyQt5). |
+Users get exactly **one zip per supported Krita version**
+(`clonestamp_tool-krita-<x.y.z>-windows-x64.zip`, currently 6.0.4), installed via
+*Tools › Scripts › Import Python Plugin from File*. The zip holds a small
+Python loader (`clonestamp_tool`) plus the DLL. No other install route
+(no install.cmd, no copying into the Krita install).
 
-The C++ tool is the reference implementation and is **ahead** of the Python
-one. Ctrl+click samples a source point and freezes a copy-on-write source
-snapshot. The C++ tool paints **live per frame** while dragging (a 1 byte/px
-stroke buffer is composited at most ~60×/s over the united area, opacity
-applied via `KisPainter`, one undo step per stroke); the Python plugin still
-composites **once** at release (single undo step, no live painting). The two
-are **no longer in lockstep** — the C++ tool additionally supports all bit
-depths/color spaces, brush tips, presets, pressure, and airbrush.
+| Path | Contents |
+| --- | --- |
+| `Tool-plugin/` | The tool: `KisToolCloneStamp.cpp/.h`, `ClonestampToolPlugin.cpp`, icons + `.qrc`, `CMakeLists.txt`, `NOTE.md` (build recipe) |
+| `Tool-plugin/pykrita-loader/` | Loader plugin (`clonestamp_tool/__init__.py`, `updater.py`, `.desktop`) and `make_zip.py` |
+| `Tool-plugin/windows/build-krita.bat` | Configure + build the tool DLL against Krita 6.0.4 |
+| `release/krita-6.0.4-windows-x64/` | The released zip |
+| `tools/check_plugin_zip.py` | Runs Krita's own importer code on a zip |
+| `tools/krita_mcp/` | MCP bridge into a running Krita + GUI tests |
+| `docs/krita-pitfalls.md` | Verified Krita API pitfalls with evidence — read before changing tool or loader |
 
-## Machine layout (development happens on Windows)
+## Machine layout (Windows)
 
 | Location | Contents |
 | --- | --- |
-| This repository | C++ tool source, Python plugin source + zip, `release/` prebuilt DLL, docs. |
-| `D:\_Code\Krita\krita-src\` | Full Krita source checkout (tag `v6.0.4.1`). The C++ tool builds there as `plugins\tools\tool_clonestamp\` — copy changed files from `Tool-plugin/` into it, then `cmake --build D:\_Code\Krita\dev\build68 --target kritatoolclonestamp`. |
-| `D:\_Code\Krita\dev\` | Build environment: `env68/` (fetched deps + `base-env.bat`), `cmake-3.31.8`, `ninja`, `build68/` (build tree), `install68/` (install tree). |
-| `%APPDATA%\krita\pykrita\clonestamp_tool\` | The installed tool (loader + `lib\kritatoolclonestamp.dll`), as end users get it from the plugin zip. Developer deploy: replace the DLL in `lib\` (rename the loaded one aside, no admin needed), restart Krita. |
-| `C:\Program Files\Krita (x64)\` | The official Krita 6.0.4. Keep `lib\kritaplugins\` free of clonestamp files: Krita loads every file there, any extension, and an old copy would win. |
+| `D:\_Code\Krita\krita-src\` | Krita source, tag `v6.0.4.1`; the tool builds as `plugins\tools\tool_clonestamp\` (copy changed files there from `Tool-plugin/`) |
+| `D:\_Code\Krita\dev\` | Build env: `env68\` (deps branch `transition.now/qt6.8.0` = Qt 6.8), `cmake-3.31.8` (not 4.x), `ninja`, llvm-mingw 20251118, `build68\` (build tree) |
+| `%APPDATA%\krita\pykrita\clonestamp_tool\` | Installed tool (loader + `lib\kritatoolclonestamp.dll`) |
+| `%LOCALAPPDATA%\clonestamp_tool\` | Cached DLL copy the loader actually loads (`kritatoolclonestamp-<sha1>.dll`) |
+| `C:\Program Files\Krita (x64)\` | Official Krita 6.0.4 — never put clonestamp files into `lib\kritaplugins\` (Krita loads every file there, any extension) |
+| `D:\_Code\Krita\krita-rag\` | Krita RAG (MCP `krita-rag`: `search_krita`, `get_krita_symbol`, …) over Krita headers, plugin sources and the pitfalls |
 
 ## Hard rules
 
-1. **`main` is the single line of development.** The in-plugin updater
-   downloads `clonestamp_core.py` / `clonestamp_docker.py` / `__init__.py`
-   from `main` via raw.githubusercontent.com and compares `VERSION` in
-   `clonestamp_core.py`. Anything merged to `main` is immediately
-   user-visible. Parallel work in separate sessions must converge on
-   `main` before anyone tests "the latest version".
-2. **Bump `VERSION`** (in `clonestamp_core.py`) on every behavior change —
-   it drives the updater *and* is the only reliable way to confirm which
-   build a running Krita actually loaded (shown in the docker footer).
-3. **Rebuild `python-plugin/clonestamp.zip` before every push**: delete
-   it, then from `python-plugin/` zip the **`clonestamp/` folder itself**
-   (`zip -r clonestamp.zip clonestamp -x "clonestamp/__pycache__/*"`).
-   The folder structure is load-bearing: Krita's plugin importer looks
-   for `clonestamp/__init__.py` *inside* the archive and reports "No
-   plugins found in archive" for a flat zip — this exact regression
-   shipped once (an earlier version of this rule said to zip the folder's
-   *contents*) and was only caught when a real zip import was attempted.
-   The zip is tracked in git on purpose — it is the download users
-   install. After changing it, verify with `unzip -l` that every entry
-   starts with `clonestamp/`.
-4. **Testing.** The C++ tool has an automated suite in `tools/krita_mcp/`:
-   an MCP bridge (the `kritamcp` Python plugin listens on 127.0.0.1:50017;
-   `krita_mcp.py` is the MCP server; `kcall.py` is the CLI) plus
-   `tests/clone_test.py` (8/16-bit/float, left and right image half) and
-   `tests/brush_tests.py` (Opacity cap, Flow buildup, Square vs. Round,
-   Airbrush, Spacing). **The tests drive the REAL mouse** — synthetic Qt
-   events do not paint in Krita — so do not touch the mouse while they run.
-   Invoke with `python kcall.py exec "DEPTH='U16'"` then
-   `python kcall.py exec -f tests/clone_test.py`. The Python plugin is still
-   tested by hand: every change ships with a hands-on test recipe in
-   `docs/change-report-2026-07-18.md` (append to it, same format); to test a
-   Python change locally, copy the folder over the installed copy, delete
-   its `__pycache__`, restart Krita, and verify the docker shows the new
-   version.
-5. **One distribution: the plugin zip.** End users install
-   `clonestamp_tool-<krita>-windows-x64.zip` via Import Python Plugin; the
-   loader loads the DLL from its own folder (no admin, nothing in the Krita
-   install). There is exactly one zip per supported Krita version. Do not
-   put the DLL into `lib\kritaplugins` (Krita loads every file there, even
-   renamed ones). Don't ship debug logging enabled — it does
-   file I/O per stroke tick and is gated behind a `%TEMP%` sentinel file
-   for that reason.
+1. **`main` is the single line of development**; `krita-6.0.4` mirrors it.
+   Commits may also come from the GitHub web UI — fetch/rebase before pushing,
+   never force-push `main`.
+2. **Bump `VERSION`** in `Tool-plugin/pykrita-loader/clonestamp_tool/__init__.py`
+   for every release; it must equal the release tag (`v2.1.3` ↔ `"2.1.3"`).
+   The update menu compares it with GitHub's latest release.
+3. **One zip per Krita version.** Build it with `make_zip.py` (it writes the
+   directory entries Krita's importer needs — without them: "No plugins found
+   in archive") and check it with `tools/check_plugin_zip.py` before
+   releasing. When a new release replaces an old one for the same Krita
+   version, delete the old GitHub release (keep the tag).
+4. **A DLL is binary-locked to one Krita build.** Build against the exact deps
+   and tag of the official release; then compare the DLL's imports with the
+   installed Krita's exports (`llvm-readobj --coff-imports` / `--coff-exports`,
+   nothing may be missing). The loader refuses other Krita versions.
+5. **GUI tests drive the real mouse** (synthetic Qt mouse events don't paint in
+   Krita): run them only with the user's explicit OK, Krita visible in the
+   foreground, user away from the mouse. The harness refuses to click when
+   Krita is minimized. The first 1–2 runs after a Krita start are flaky.
+6. **Never restart or kill Krita without checking for unsaved documents**
+   (`[(d.fileName(), d.modified()) for d in Krita.instance().documents()]`
+   via the bridge). If anything is modified, ask the user.
+7. Don't ship debug logging enabled.
+
+## Release checklist
+
+1. Copy changed files into `krita-src\plugins\tools\tool_clonestamp\`, run
+   `Tool-plugin\windows\build-krita.bat` → `BUILD OK`.
+2. Import check against the installed Krita (rule 4).
+3. Bump `VERSION` (rule 2); `python Tool-plugin/pykrita-loader/make_zip.py <dll> <zip>`;
+   `python -I tools/check_plugin_zip.py <zip>` → `OK`.
+4. Install the zip into the running Krita via the bridge (Krita's
+   `PluginImporter`), restart Krita (rule 6), check: toolbox button present
+   (last in the Fill section), `get_errors` empty; GUI tests with the user's OK.
+5. Copy the zip to `release/…/`, update README links, commit
+   (`Co-Authored-By` line), tag `vX.Y.Z`, push `main` + tag, mirror
+   `krita-6.0.4`.
+6. `gh release create` with the zip (gh: `C:\Program Files\GitHub CLI\gh.exe`,
+   token via `git credential fill` → `GH_TOKEN`), mark latest, delete the
+   superseded release for the same Krita version, download the asset once and
+   re-run `check_plugin_zip.py` on it.
 
 ## Architecture quick reference
 
-The two Python modules carry thorough docstrings — read those first:
+- `KisToolCloneStamp.cpp/.h` — the tool. Source = copy-on-write
+  `KisPaintDevice` snapshot taken at Ctrl+click (or Alt+click). Dabs go into a
+  1-byte coverage image; `compositeLive` restores the pre-stroke pixels and
+  `KisPainter::bitBlt`s the source through a per-stroke selection mask in the
+  layer's own pixel format (any bit depth), at most ~60×/s; one
+  `KisTransaction` per stroke = one undo step. Brush tips (Round/Square/any
+  Krita tip via `KisBrush::brushTipImage`), presets, flow, airbrush, pressure.
+  Outline via `updateCanvasToolOutlineDoc` + update-ahead and `paintToolOutline`.
+- `ClonestampToolPlugin.cpp` — registers the factory once; the exported
+  `load_clonestamp_plugin()` (called by the loader) also injects the tool's
+  `KoToolAction` into `KoToolManager::Private::toolActionList`, otherwise a
+  tool registered after startup has no toolbox button (Acly's approach,
+  needs `KoToolManager_p.h`). Toolbox position: Fill section, priority 100.
+- `pykrita-loader/clonestamp_tool/__init__.py` — Krita version check, loads a
+  hashed **copy** of the DLL from `%LOCALAPPDATA%` (so the plugin folder is
+  never locked and re-importing a zip works while Krita runs), adds the menu
+  action *Tools › Scripts › Clone Stamp: Check for Updates*.
+- `updater.py` — GitHub latest release → zip for the running Krita version →
+  Krita's `PluginImporter` (closes the archive itself; the importer leaves it
+  open). Statuses: up to date / update / no build for this Krita / error.
 
-- `clonestamp_core.py` — pure pixel logic, no widgets: coordinate mapping,
-  source snapshot, dab accumulator, `finalize_stroke` (the only
-  `setPixelData` call), preview helpers. Module docstring has the feature
-  map.
-- `clonestamp_docker.py` — all UI/eventing: global event filter (only
-  Press/Release/Move exist; drags are polled at 30 ms), `_StrokeOverlay`
-  live preview, ring-cursor pixmap with change-signature caching,
-  Shift+drag resize (blank cursor + pointer warp + MouseMove swallowing +
-  overlay ring — see `_onResizeTick` for why exactly this combination),
-  document-switch watcher (polls active document id; disables the brush
-  and clears the source on change), self-update UI.
-- `KisToolCloneStamp.cpp/.h` — the C++ flagship. No longer a 1:1 port:
-  source snapshot is a copy-on-write `KisPaintDevice`; dabs go into a
-  1-byte coverage buffer and are composited live (at most ~60x/s) with
-  `KisPainter` through a per-stroke selection mask in the layer's own
-  pixel format; brush tips (Round/Square/any Krita tip), presets, flow,
-  airbrush and pressure; outline via `updateCanvasToolOutlineDoc` +
-  `paintToolOutline`. See `docs/krita-pitfalls.md` for the Krita API
-  lessons behind these choices.
+Why the code looks the way it does: `docs/krita-pitfalls.md` (also in the RAG).
 
-Hard-won platform knowledge (do not relearn these the hard way): canvas
-widget resolution must go through the QMdiArea's `activeSubWindow()`;
-document identity comes from the root node's `uniqueId()` (not sip wrapper
-identity); overlay widgets over the GL canvas need
-`Qt.WA_AlwaysStackOnTop`; teardown paths need `RuntimeError` guards
-because Qt/sip objects can already be deleted when callbacks fire.
+## Roadmap
 
-## Deferred / roadmap
-
-- **C++ tool** (done as of 2026-10-06): ~~blend **Flow**~~ and ~~a live
-  stroke during the drag~~ are now implemented — Flow builds up per dab,
-  and the stroke paints live per frame (not just the ghost preview).
-  Remaining parity: blend **Mode** and **Sample: Current & Below** (needs
-  partial layer-stack compositing).
-- **Python**: accumulator is whole-document sized (capped ~800 MB);
-  dirty-bounds sizing is the known future optimization if the cap bites.
-- **Distribution**: the C++ tool ships as the prebuilt `release/` DLL for
-  the one matching Krita version (6.0.4.x today); every new Krita version
-  needs a rebuilt DLL. The Python plugin's canonical download is the
-  tracked zip on `main` (what the README links). GitHub releases are not
-  maintained per version; if one exists, it must match `main` or be
-  deleted. Version numbering was restarted at **1.0** on 2026-07-19 — the
-  1.x.y prototype history up to 1.7.1 predates the restart (see the change
-  report).
-- **Installer-zip (Acly model) — DONE in v2.1.1** (`Tool-plugin/pykrita-loader/`, loads the DLL via ctypes; no copy step needed). Original notes: (investigated
-  2026-07-19, studying `Acly/krita-ai-tools`'s distribution model): that
-  project ships a real native `KisTool` as a per-platform, per-Krita-version
-  release zip, installed through the ordinary **Import Python Plugin from
-  File** dialog — a tiny Python "installer" plugin copies the native `.dll`
-  into Krita's `lib/kritaplugins/` on first load, and the next restart's
-  native-plugin scan registers the real toolbox icon. We already ship the
-  DLL + `install.cmd` directly; this idea would wrap that into a single
-  importable zip so no separate install step is needed. Would need: a
-  packaging script wrapping the `D:\_Code\Krita\krita-src` build output
-  into such an installer zip, a copy-into-place mechanism with
-  permission/failure handling, and a maintained per-Krita-version
-  compatibility list (mirroring how Acly's README tells users which release
-  matches their installed Krita version).
+- **Krita 5.3.4 build** (deferred): same source tree built with Qt5
+  (`BUILD_WITH_QT6` off reports 5.3.4); verify the Qt5 deps match the official
+  5.3.4 first; loader needs a PyQt5 fallback; ship as a second zip in the same
+  release (the updater already picks the zip by Krita version).
+- Tool parity with Photoshop: blend **Mode**, **Sample: Current & Below**.
+- New Krita versions: rebuild per version (rule 4).
 
 ## History and deeper references
 
-- `docs/change-report-2026-07-18.md` — per-change rationale + manual test
-  recipes for the 2026-07 debug/optimize/parity passes (v1.5.x–v1.7.1).
-- `docs/toolchain-paths.md` — full Windows build environment recipe for
-  the Krita source tree (Phases A–C), including resolved gotchas.
-- `docs/phase-a-runbook.md` — step-by-step log of the original build
-  bring-up.
-- Git history — roughly a third of all commits are documented bugfixes;
-  commit messages carry the reasoning.
+- `docs/change-report-2026-07-18.md` — per-change rationale and test recipes,
+  including the 2026-10-06 Krita 6.0.4 port and v2.1.x fixes.
+- `Tool-plugin/NOTE.md` — the current build recipe for Krita 6.0.4.
+- `docs/toolchain-paths.md`, `docs/phase-a-runbook.md` — historical Qt5 /
+  `C:\dev` build bring-up (superseded by `NOTE.md`, kept for the gotchas).
+- Branch `krita-5` — the frozen Python plugin and its own rules.
+- Git history — commit messages carry the reasoning.
