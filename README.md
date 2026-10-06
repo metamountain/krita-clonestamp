@@ -37,7 +37,7 @@ Preview").
 **Recommended — like any Python plugin, no admin rights:**
 
 1. Download **`clonestamp_tool-krita-6.0.4-windows-x64.zip`** from
-   [Release v2.0.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.0)
+   [Release v2.1.0](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.0)
    (do not unzip it).
 2. In Krita: **Tools › Scripts › Import Python Plugin from File...**, select
    the zip, answer **Yes** to enabling the plugin.
