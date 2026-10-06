@@ -10,7 +10,9 @@ The main product is a **native C++ tool** that installs into the official
 Krita 6.0.4 Windows build and appears as a real toolbox icon. A pure-Python
 port for Krita 5.x is kept alongside it.
 
-![Demo](https://raw.githubusercontent.com/metamountain/krita-clonestamp/main/docs/preview.gif)
+![Clone Stamp in Krita 6.0.4](docs/demo-krita6.webp)
+
+*Krita 6.0.4: brush tip list, square and textured tips, live cloning. [Full-quality video (MP4, 2.8 MB)](docs/demo-krita6.mp4)*
 
 ## Downloads
 
@@ -140,6 +142,8 @@ To uninstall, delete
 | Pressure: Size / Flow | on/off | Pen pressure controls size and/or flow |
 
 ## Python plugin (Krita 5.x)
+
+![Python plugin demo](docs/preview.gif)
 
 A pure-Python implementation on Krita's `libkis` scripting API. It **works
 on Krita 5.x only** — it uses PyQt5, which Krita 6 does not provide ("not
