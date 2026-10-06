@@ -1,4 +1,4 @@
-# Wait until Tommorow: technical problems....Clonestamp Tool with Preview
+# Clonestamp Tool with Preview
 
 A Photoshop-style Clone Stamp for [Krita](https://krita.org), for anyone who paints in Krita and wants to clone parts of an image. Ctrl+click to sample a source point, then drag to paint a soft-edged copy of it — with a live preview and one undo step per stroke. It is a native tool that appears as a real icon in the Krita toolbox.
 
@@ -24,11 +24,11 @@ Works on **Krita 6.0.4.x on Windows x64** only.
 
 1. Download **`clonestamp_tool-krita-6.0.4-windows-x64.zip`** from [Release v2.1.3](https://github.com/metamountain/krita-clonestamp/releases/tag/v2.1.3). Do not unzip it.
 2. In Krita: **Tools › Scripts › Import Python Plugin from File...**, select the zip, answer **Yes** to enable the plugin.
-3. Restart Krita. The tool appears in the toolbox next to **Smart Patch** (stamp icon).
+3. Restart Krita. The stamp is the last tool in the toolbox's Fill section.
 
 **Updates:** **Tools › Scripts › Clone Stamp: Check for Updates** finds, downloads and installs the newest version for your Krita (then restart Krita).
 
-**Updating from v2.1.1 or older:** close Krita, delete the folder `%APPDATA%\krita\pykrita\clonestamp_tool`, start Krita, then import the new zip. (Older versions keep their library locked while Krita runs; from v2.1.2 on, you can simply import a newer zip over the installed one and restart; from v2.1.3 on, use the update menu.)
+**Coming from v2.1.1 or older (one time):** close Krita, delete the folder `%APPDATA%\krita\pykrita\clonestamp_tool`, start Krita, then import the zip.
 
 On any other Krita version the plugin refuses to load and tells you so. Uninstall: disable or delete `clonestamp_tool` in **Settings › Configure Krita › Python Plugin Manager**.
 
