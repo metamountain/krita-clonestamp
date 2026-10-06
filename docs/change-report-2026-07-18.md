@@ -383,3 +383,32 @@ the canvas (e.g. "Ctrl+click to set a source point first", locked layer).
 **Test:** manual — with the tool selected, click-drag **without** sampling
 first → the canvas shows "Ctrl+click to set a source point first"; lock a
 layer and paint on it → a locked-layer message appears.
+
+---
+
+## 2026-10-06 — v2.1.2: toolbox button and in-place updates
+
+### Toolbox button when loaded via Python loader
+**What:** `load_clonestamp_plugin()` now calls `injectToolboxAction()`, which
+appends a `KoToolAction` to `KoToolManager::Private::toolActionList` (via
+`KoToolManager::instance()->priv()`) so the toolbox gets a button for the
+clone stamp. It only appends when no action with id
+"KritaShape/KisToolCloneStamp" is present yet (duplicate guard).
+**Why:** `KoToolManager` builds `toolActionList` once from `KoToolRegistry`
+before Python plugins run, and `KoToolBox` creates buttons only from that
+list — so a tool registered via the ctypes loader (the Python plugin) had no
+toolbox button (measured 0 buttons).
+**Test:** after installing via zip and restarting Krita, check the clone stamp
+button is in the toolbox next to Smart Patch.
+
+### In-place plugin updates
+**What:** the loader now loads a copy of the tool DLL at
+`%LOCALAPPDATA%\clonestamp_tool\kritatoolclonestamp-<sha1-12>.dll`
+(`_shadow_copy`) instead of the file inside the plugin folder; stale copies
+are deleted once no longer locked.
+**Why:** re-importing the plugin zip while Krita runs made the importer
+`shutil.rmtree` the old plugin folder, but the loaded DLL in
+`clonestamp_tool/lib` is locked by Windows → `PermissionError [WinError 5]`.
+Loading a shadow copy removes the file the importer deletes from the load path.
+**Test:** re-import the zip while Krita is running → no error; after restart
+the new version is active.

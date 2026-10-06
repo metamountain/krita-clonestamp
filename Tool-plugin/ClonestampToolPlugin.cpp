@@ -7,19 +7,41 @@
 
 #include <kpluginfactory.h>
 
+#include <KoToolManager.h>
+#include <KoToolManager_p.h>
 #include <KoToolRegistry.h>
 
 #include "KisToolCloneStamp.h"
 
 namespace
 {
-// Registers the tool once, however the DLL got loaded: as a regular plugin
-// from lib/kritaplugins (install.cmd) and/or through the Python loader below.
+const QString TOOL_ID = QStringLiteral("KritaShape/KisToolCloneStamp");
+
+// Registers the tool factory once, however the DLL got loaded.
 void registerCloneStampTool()
 {
     KoToolRegistry *registry = KoToolRegistry::instance();
-    if (!registry->contains(QStringLiteral("KritaShape/KisToolCloneStamp"))) {
+    if (!registry->contains(TOOL_ID)) {
         registry->add(new KisToolCloneStampFactory());
+    }
+}
+
+// KoToolManager builds its tool action list once, from the registry, when it
+// is first used -- before Python plugins run. A tool registered later (our
+// ctypes loader) is selectable via its action but gets no toolbox button
+// unless its action is added to that list before the toolbox is built.
+// Same approach as Acly's krita-vision-tools (injectTools). Guarded so a
+// second call or an already-listed tool never adds a duplicate.
+void injectToolboxAction()
+{
+    KoToolManager::Private *p = KoToolManager::instance()->priv();
+    for (KoToolAction *action : std::as_const(p->toolActionList)) {
+        if (action->id() == TOOL_ID) {
+            return;
+        }
+    }
+    if (KoToolFactoryBase *factory = KoToolRegistry::instance()->value(TOOL_ID)) {
+        p->toolActionList.append(new KoToolAction(factory));
     }
 }
 } // namespace
@@ -36,13 +58,13 @@ ClonestampToolPlugin::~ClonestampToolPlugin()
 {
 }
 
-// Entry point for the Python-plugin distribution (same model as Acly's
-// krita-ai-tools): a tiny pykrita plugin loads this DLL from its own folder
-// with ctypes and calls this function -- no copy into Program Files, no
-// admin rights, installed via Tools > Scripts > Import Python Plugin.
+// Entry point for the plugin-zip distribution: the clonestamp_tool Python
+// loader loads this DLL with ctypes and calls this function -- no admin
+// rights, nothing written into the Krita install.
 extern "C" Q_DECL_EXPORT void load_clonestamp_plugin()
 {
     registerCloneStampTool();
+    injectToolboxAction();
 }
 
 #include "ClonestampToolPlugin.moc"

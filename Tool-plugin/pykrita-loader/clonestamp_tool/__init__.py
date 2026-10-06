@@ -32,6 +32,36 @@ def _warn(text):
         pass
 
 
+def _shadow_copy(lib_file):
+    """Load a copy, never the file in the plugin folder.
+
+    Windows locks a loaded DLL. If Krita loaded lib/ directly, re-importing
+    the plugin zip while Krita runs (an update) fails: Krita's importer
+    deletes the old plugin folder first and hits the locked DLL. So the DLL
+    is copied to a per-content cache file and loaded from there; stale
+    copies from earlier versions are removed when they are no longer locked.
+    """
+    import hashlib
+    import shutil
+
+    data = lib_file.read_bytes()
+    digest = hashlib.sha1(data).hexdigest()[:12]
+    cache = Path(os.environ.get("LOCALAPPDATA", str(lib_file.parent))) / "clonestamp_tool"
+    cache.mkdir(parents=True, exist_ok=True)
+    target = cache / f"kritatoolclonestamp-{digest}.dll"
+    if not target.exists():
+        tmp = target.with_suffix(".tmp")
+        shutil.copyfile(lib_file, tmp)
+        os.replace(tmp, target)
+    for old in cache.glob("kritatoolclonestamp-*.dll"):
+        if old != target:
+            try:
+                old.unlink()
+            except OSError:
+                pass  # still loaded by another Krita instance
+    return target
+
+
 class CloneStampLoader(Extension):
     def __init__(self, parent):
         super().__init__(parent)
@@ -47,12 +77,17 @@ class CloneStampLoader(Extension):
 
         lib_dir = Path(__file__).parent / "lib"
         lib_file = lib_dir / DLL_NAME
+        try:
+            load_file = _shadow_copy(lib_file)
+        except OSError as e:
+            _warn(f"Failed to prepare {lib_file}: {e}")
+            return
         # Dependencies (libkritaui.dll, Qt, ...) live next to krita.exe and are
         # already loaded; keep them findable while the DLL resolves its imports.
         prev_path = os.environ.get("PATH", "")
         os.environ["PATH"] = os.pathsep.join([str(lib_dir), str(Path(sys.executable).parent), prev_path])
         try:
-            lib = ctypes.CDLL(str(lib_file.resolve()))
+            lib = ctypes.CDLL(str(load_file))
             lib.load_clonestamp_plugin()
         except (OSError, AttributeError) as e:
             _warn(f"Failed to load {lib_file}: {e}")
