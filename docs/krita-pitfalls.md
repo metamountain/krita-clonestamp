@@ -88,3 +88,16 @@ Krita's default canvas input profile binds Ctrl+click, Shift+drag, Ctrl+Alt+clic
 Alt+left click, so it arrives in `beginPrimaryAction` with `Qt::AltModifier` set -- usable for
 tool-specific gestures (Clone Stamp: Alt+click sets the source).
 Evidence: `krita/data/input/kritadefault.profile`; clone_test.py ALT=True PASS (U8, U16).
+
+### Undo for pixel changes: one KisTransaction per stroke
+Wrap direct pixel writes (`writeBytes`, `KisPainter`, `copyAreaOptimized`) in a `KisTransaction`
+created on the layer's paint device at stroke start; `commit(image()->undoAdapter())` at stroke
+end gives exactly one undo step, however many dabs were written in between.
+Evidence: `KisToolCloneStamp::beginStroke` / `endPrimaryAction` (krita-clonestamp v2.x).
+
+### Copy pixels through a mask in any bit depth
+`KisPainter gc(dst, selection); gc.setCompositeOpId(COMPOSITE_OVER); gc.setOpacityF(o);
+gc.bitBlt(dstPt, srcDevice, srcRect);` -- the selection (alpha mask, `KisSelection` /
+`pixelSelection()->writeBytes`) masks the copy, KisPainter converts color spaces and works for
+8/16-bit integer and float. Restore an area first with `KisPainter::copyAreaOptimized`.
+Evidence: `KisToolCloneStamp::compositeLive`; clone_test.py PASS for U8/U16/F32.
