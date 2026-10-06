@@ -1,4 +1,4 @@
-# Clonestamp Tool with Preview
+# Wait until Tommorow: technical problems....Clonestamp Tool with Preview
 
 A Photoshop-style Clone Stamp for [Krita](https://krita.org), for anyone who paints in Krita and wants to clone parts of an image. Ctrl+click to sample a source point, then drag to paint a soft-edged copy of it — with a live preview and one undo step per stroke. It is a native tool that appears as a real icon in the Krita toolbox.
 
