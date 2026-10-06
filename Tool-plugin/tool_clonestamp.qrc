@@ -1,0 +1,11 @@
+<!DOCTYPE RCC>
+<!--
+  Icon: Phosphor Icons "stamp-fill" (https://phosphoricons.com), MIT License,
+  Copyright (c) 2020 Phosphor Icons. Recolored to Krita's toolbox palette.
+-->
+<RCC version="1.0">
+    <qresource prefix="/pics">
+        <file>dark_krita_tool_clonestamp.svg</file>
+        <file>light_krita_tool_clonestamp.svg</file>
+    </qresource>
+</RCC>

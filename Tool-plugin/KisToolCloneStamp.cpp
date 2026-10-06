@@ -5,78 +5,91 @@
 
 #include "KisToolCloneStamp.h"
 
-#include <QPainter>
-#include <QRadialGradient>
-#include <QColor>
-#include <QRect>
 #include <QByteArray>
-#include <QPen>
-#include <QWidget>
-#include <QVBoxLayout>
+#include <QCheckBox>
+#include <QColor>
+#include <QComboBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QSpinBox>
-#include <QSlider>
-#include <QCheckBox>
-#include <QComboBox>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPen>
+#include <QRadialGradient>
+#include <QRandomGenerator>
+#include <QRect>
 #include <QSignalBlocker>
+#include <QToolButton>
+#include <QTransform>
+#include <QVBoxLayout>
+#include <QWidget>
+#include <cmath>
+#include <cstring>
+#include <functional>
 
-#include <kis_cursor.h>
-#include <KoPointerEvent.h>
 #include <KoCanvasBase.h>
+#include <KoColorSpace.h>
+#include <KoCompositeOpRegistry.h>
+#include <KoPointerEvent.h>
 #include <KoViewConverter.h>
-
+#include <KisOptimizedBrushOutline.h>
+#include <KisResourceItemChooser.h>
+#include <KisResourceModel.h>
+#include <KisResourceTypes.h>
+#include <KisViewManager.h>
+#include <kis_brush.h>
+#include <kis_canvas2.h>
+#include <kis_cursor.h>
+#include <kis_image.h>
 #include <kis_node.h>
 #include <kis_paint_device.h>
-#include <kis_image.h>
+#include <kis_painter.h>
+#include <kis_pixel_selection.h>
+#include <kis_selection.h>
+#include <kis_slider_spin_box.h>
 #include <kis_transaction.h>
-#include <KoColorSpace.h>
 
 namespace
 {
 
-// Ceiling on the per-stroke accumulator and the source snapshot (pixel
-// count) to bound worst-case memory use -- a Format_ARGB32_Premultiplied
-// buffer this size is 4 bytes/px, so this caps each around 800MB. Mirrors
-// MAX_ACCUMULATOR_PIXELS / MAX_SOURCE_SNAPSHOT_PIXELS in the Python
-// plugin's clonestamp_core.py; keep the two in sync.
+// Ceiling on the per-stroke coverage buffer (pixel count) to bound memory:
+// it is 4 bytes/px, so this caps it around 800MB.
 constexpr qint64 MAX_ACCUMULATOR_PIXELS = 200000000; // ~14000x14000
-constexpr qint64 MAX_SOURCE_SNAPSHOT_PIXELS = MAX_ACCUMULATOR_PIXELS;
 
-// White circle with the brush's soft falloff and opacity baked into its
-// alpha channel. One image serves as both the dab stamp (drawn into the
-// stroke accumulator with SourceOver) and the per-pixel mask for the
-// preview/composite paths (drawn with DestinationIn, which keeps the
-// destination's color but multiplies its alpha by this image's alpha).
-//
-// Gradient stops: solid from the center out to `hardness` (fraction of the
-// radius), then a smooth fade to fully transparent at the rim -- so
-// hardness 1.0 is a crisp-edged circle and hardness 0.0 fades from the
-// center outward. The 0.999 clamp keeps the middle stop strictly below the
-// final stop at 1.0: two stops at the same position would make the
-// solid-to-transparent order undefined.
-// Mirrors _build_soft_circle in clonestamp_core.py; keep the two in sync.
-QImage buildSoftCircle(int size, qreal hardness, int opacityPct)
+// Coverage falloff shared by the round and square tips: solid up to
+// `hardness` (fraction of the radius), then a smooth fade to 0 at the rim.
+inline qreal falloff(qreal t, qreal hardness)
 {
-    QImage img(size, size, QImage::Format_ARGB32_Premultiplied);
-    img.fill(Qt::transparent);
+    if (t <= hardness) {
+        return 1.0;
+    }
+    if (t >= 1.0) {
+        return 0.0;
+    }
+    const qreal x = 1.0 - (t - hardness) / qMax(qreal(1e-6), 1.0 - hardness);
+    return x * x * (3.0 - 2.0 * x); // smoothstep
+}
 
-    QPainter painter(&img);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-
-    const qreal radius = size / 2.0;
-    hardness = qBound(qreal(0.0), hardness, qreal(1.0));
-    const int alpha = qBound(0, qRound(255.0 * opacityPct / 100.0), 255);
-
-    QRadialGradient grad(size / 2.0, size / 2.0, qMax(radius, 0.5));
-    grad.setColorAt(0.0, QColor(255, 255, 255, alpha));
-    grad.setColorAt(qMin(hardness, qreal(0.999)), QColor(255, 255, 255, alpha));
-    grad.setColorAt(1.0, QColor(255, 255, 255, 0));
-    painter.setBrush(grad);
-    painter.drawEllipse(QRectF(0, 0, size, size));
-    painter.end();
-    return img;
+// Bitmap tip -> white image with the coverage in alpha. Krita's convention
+// for mask tips: dark = paint, combined with the image's own alpha
+// (libs/brush/kis_brush.cpp); color image tips contribute their alpha only.
+QImage tipCoverageFromBrush(const KisBrushSP &brush)
+{
+    const QImage src = brush->brushTipImage().convertToFormat(QImage::Format_ARGB32);
+    if (src.isNull()) {
+        return QImage();
+    }
+    const bool maskTip = brush->brushType() == MASK || brush->brushType() == PIPE_MASK;
+    QImage out(src.size(), QImage::Format_ARGB32_Premultiplied);
+    for (int y = 0; y < src.height(); ++y) {
+        const QRgb *in = reinterpret_cast<const QRgb *>(src.constScanLine(y));
+        QRgb *o = reinterpret_cast<QRgb *>(out.scanLine(y));
+        for (int x = 0; x < src.width(); ++x) {
+            const int a = maskTip ? (255 - qGray(in[x])) * qAlpha(in[x]) / 255 : qAlpha(in[x]);
+            o[x] = qRgba(a, a, a, a); // premultiplied white
+        }
+    }
+    return out;
 }
 
 } // namespace
@@ -85,6 +98,9 @@ KisToolCloneStamp::KisToolCloneStamp(KoCanvasBase *canvas)
     : KisTool(canvas, KisCursor::crossCursor())
 {
     setObjectName("tool_clonestamp");
+    connect(&m_airbrushTimer, &QTimer::timeout, this, [this]() { airbrushTick(); });
+    m_flushTimer.setSingleShot(true);
+    connect(&m_flushTimer, &QTimer::timeout, this, [this]() { flushComposite(); });
 }
 
 KisToolCloneStamp::~KisToolCloneStamp()
@@ -98,9 +114,11 @@ void KisToolCloneStamp::activate(const QSet<KoShape *> &shapes)
 
 void KisToolCloneStamp::deactivate()
 {
+    m_airbrushTimer.stop();
     if (m_isPainting) {
-        // A stroke was left open (e.g. tool switched mid-drag); flush the
-        // accumulated dabs so far rather than losing them silently.
+        // A stroke was left open (e.g. tool switched mid-drag): it is already
+        // on the layer, just close it properly.
+        flushComposite();
         finalizeStroke();
     }
     if (m_transaction) {
@@ -109,37 +127,41 @@ void KisToolCloneStamp::deactivate()
     }
     m_isPainting = false;
     m_isResizing = false;
-    m_accImage = QImage();
-    m_accBounds = QRect();
-    m_useAccumulator = false;
     KisTool::deactivate();
 }
 
+// ---------------------------------------------------------------- source
+
 bool KisToolCloneStamp::isValidPaintLayer(KisNodeSP node) const
 {
-    if (!node || !node->inherits("KisPaintLayer")) {
-        return false;
+    // Any raster paint layer works, in any color model or bit depth: all
+    // reading and writing goes through KisPainter / KisPaintDevice, which
+    // handle the pixel format (and convert between color spaces).
+    return node && node->inherits("KisPaintLayer") && node->paintDevice();
+}
+
+bool KisToolCloneStamp::canPaintOn(KisNodeSP node) const
+{
+    return isValidPaintLayer(node) && node->isEditable();
+}
+
+void KisToolCloneStamp::showMessage(const QString &text) const
+{
+    KisCanvas2 *kisCanvas = qobject_cast<KisCanvas2 *>(canvas());
+    if (kisCanvas && kisCanvas->viewManager()) {
+        kisCanvas->viewManager()->showFloatingMessage(text, QIcon());
     }
-    KisPaintDeviceSP device = node->paintDevice();
-    if (!device) {
-        return false;
-    }
-    const KoColorSpace *cs = device->colorSpace();
-    if (!cs) {
-        return false;
-    }
-    return cs->colorModelId().id() == "RGBA" && cs->colorDepthId().id() == "U8";
 }
 
 KisPaintDeviceSP KisToolCloneStamp::sourceDeviceForSampling() const
 {
-    if (!m_hasSource || !image()) {
+    if (!image()) {
         return nullptr;
     }
     if (m_sampleScope == SampleScope::AllLayers) {
         return image()->projection();
     }
-    if (!m_sourceNode || !isValidPaintLayer(m_sourceNode)) {
+    if (!isValidPaintLayer(m_sourceNode)) {
         return nullptr;
     }
     return m_sourceNode->paintDevice();
@@ -148,101 +170,308 @@ KisPaintDeviceSP KisToolCloneStamp::sourceDeviceForSampling() const
 void KisToolCloneStamp::sampleSource(const QPointF &docPoint)
 {
     KisNodeSP node = currentNode();
-    if (!isValidPaintLayer(node)) {
+    if (m_sampleScope == SampleScope::CurrentLayer && !isValidPaintLayer(node)) {
+        showMessage(i18n("Clone Stamp: select a paint layer to sample from, "
+                         "or set Sample to \"All Layers\"."));
         return;
     }
     m_sourceNode = node;
     m_sourcePoint = docPoint;
-    m_hasSource = true;
     m_hasStrokeOffset = false;
     m_hasLastDabPoint = false;
     takeSourceSnapshot();
+    m_hasSource = bool(m_sourceSnapshot);
 }
 
 void KisToolCloneStamp::takeSourceSnapshot()
 {
-    // Freeze a copy of the source pixels at the moment they're sampled --
-    // see m_sourceSnapshot in the header for why. Taken once here with the
-    // sample scope current at Ctrl+click time; changing the scope combo
-    // afterwards deliberately does NOT retake it (same semantics as
-    // sample_source_point/_snapshot_source in clonestamp_core.py).
-    m_sourceSnapshot = QImage();
+    // Copy-on-write: this copies tile references, not pixels, so it is cheap
+    // even for huge documents; tiles are duplicated only when the original
+    // changes afterwards.
+    m_sourceSnapshot = nullptr;
     KisPaintDeviceSP srcDevice = sourceDeviceForSampling();
-    if (!srcDevice || !image()) {
-        return;
+    if (srcDevice) {
+        m_sourceSnapshot = new KisPaintDevice(*srcDevice);
     }
-    // The whole canvas rect, not the device's exact content bounds: every
-    // read/write in this tool is already clipped to canvas bounds, so this
-    // covers everything a stroke can touch.
-    const QRect bounds = image()->bounds();
-    const qint64 pixels = qint64(bounds.width()) * bounds.height();
-    if (bounds.isEmpty() || pixels > MAX_SOURCE_SNAPSHOT_PIXELS) {
-        // Too large to reasonably hold a whole extra copy of in memory;
-        // leave the snapshot null so reads fall back to the live device.
-        // That re-opens the smear-when-overlapping issue, but only on
-        // documents this big, and at least keeps the tool working.
-        return;
-    }
-
-    QByteArray bytes(bounds.width() * bounds.height() * static_cast<int>(srcDevice->pixelSize()), 0);
-    srcDevice->readBytes(reinterpret_cast<quint8 *>(bytes.data()),
-                         bounds.x(), bounds.y(), bounds.width(), bounds.height());
-    // Krita's 8-bit RGBA colorspace stores straight BGRA bytes in memory,
-    // matching QImage::Format_ARGB32 byte-for-byte on little-endian. The
-    // copy() detaches from `bytes`, which dies at end of scope.
-    m_sourceSnapshot = QImage(reinterpret_cast<const uchar *>(bytes.constData()),
-                              bounds.width(), bounds.height(), QImage::Format_ARGB32).copy();
-    m_snapshotLeft = bounds.x();
-    m_snapshotTop = bounds.y();
+    m_previewCache = QImage();
+    m_previewSrcImage = QImage();
+    m_previewSrcRect = QRect();
 }
 
 QImage KisToolCloneStamp::readSourceImage(const QRect &rect) const
 {
-    if (!m_sourceSnapshot.isNull()) {
-        // QImage::copy fills areas outside the snapshot with transparent
-        // black, which is exactly the out-of-bounds behavior we want.
-        const QImage slice = m_sourceSnapshot.copy(rect.translated(-m_snapshotLeft, -m_snapshotTop));
-        return slice.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    }
-
-    KisPaintDeviceSP srcDevice = sourceDeviceForSampling();
-    if (!srcDevice || rect.isEmpty()) {
+    if (!m_sourceSnapshot || rect.isEmpty()) {
         return QImage();
     }
-    QByteArray bytes(rect.width() * rect.height() * static_cast<int>(srcDevice->pixelSize()), 0);
-    srcDevice->readBytes(reinterpret_cast<quint8 *>(bytes.data()),
-                         rect.x(), rect.y(), rect.width(), rect.height());
-    const QImage wrapped(reinterpret_cast<const uchar *>(bytes.constData()),
-                         rect.width(), rect.height(), QImage::Format_ARGB32);
-    // convertToFormat always deep-copies here (formats differ), detaching
-    // from `bytes` before it goes out of scope.
-    return wrapped.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    const QImage img = m_sourceSnapshot->convertToQImage(nullptr, rect.x(), rect.y(), rect.width(), rect.height());
+    return img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 }
 
-const QImage &KisToolCloneStamp::softCircle() const
+// ---------------------------------------------------------------- brush tip
+
+qreal KisToolCloneStamp::maskSide(qreal diameter) const
 {
-    const int size = qMax(1, m_brushSize);
-    if (m_cachedCircle.isNull()
-        || m_cachedCircleSize != size
-        || m_cachedCircleHardness != m_brushHardness
-        || m_cachedCircleOpacity != m_brushOpacity) {
-        m_cachedCircle = buildSoftCircle(size, m_brushHardness, m_brushOpacity);
-        m_cachedCircleSize = size;
-        m_cachedCircleHardness = m_brushHardness;
-        m_cachedCircleOpacity = m_brushOpacity;
-    }
-    return m_cachedCircle;
+    // Round tips stay inside their circle at any angle; square and bitmap
+    // tips need room for their rotated corners.
+    return m_tipShape == TipShape::Round ? diameter : diameter * M_SQRT2;
 }
+
+QImage KisToolCloneStamp::buildDabMask(qreal diameter, qreal angleDeg, qreal alpha) const
+{
+    diameter = qMax(qreal(1.0), diameter);
+    const int side = qMax(1, int(std::ceil(maskSide(diameter))) + 2);
+    QImage mask(side, side, QImage::Format_ARGB32_Premultiplied);
+    mask.fill(Qt::transparent);
+
+    const qreal roundness = qBound(1, m_roundness, 100) / 100.0;
+    const qreal hardness = qBound(qreal(0.0), m_brushHardness, qreal(1.0));
+
+    QPainter p(&mask);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    p.translate(side / 2.0, side / 2.0);
+    p.rotate(angleDeg);
+    p.scale(1.0, roundness);
+    p.setOpacity(qBound(qreal(0.0), alpha, qreal(1.0)));
+
+    if (m_tipShape == TipShape::Round) {
+        const qreal r = diameter / 2.0;
+        QRadialGradient grad(QPointF(0, 0), qMax(r, qreal(0.5)));
+        grad.setColorAt(0.0, Qt::white);
+        grad.setColorAt(qMin(hardness, qreal(0.999)), Qt::white);
+        // a few intermediate stops approximate the smoothstep falloff
+        for (int i = 1; i < 4; ++i) {
+            const qreal t = hardness + (1.0 - hardness) * i / 4.0;
+            if (t > hardness + 0.001 && t < 0.999) {
+                grad.setColorAt(t, QColor(255, 255, 255, qRound(255 * falloff(t, hardness))));
+            }
+        }
+        grad.setColorAt(1.0, QColor(255, 255, 255, 0));
+        p.setPen(Qt::NoPen);
+        p.setBrush(grad);
+        p.drawEllipse(QPointF(0, 0), r, r);
+    } else if (m_tipShape == TipShape::Square) {
+        // Unrotated soft square at the exact size, cached; Chebyshev distance
+        // gives straight feathered edges.
+        const int n = qMax(1, qRound(diameter));
+        const QString key = QString("%1/%2").arg(n).arg(hardness);
+        if (m_squareCacheKey != key) {
+            QImage sq(n, n, QImage::Format_ARGB32_Premultiplied);
+            const qreal c = (n - 1) / 2.0;
+            const qreal half = qMax(qreal(0.5), n / 2.0);
+            for (int y = 0; y < n; ++y) {
+                QRgb *line = reinterpret_cast<QRgb *>(sq.scanLine(y));
+                const qreal v = std::abs(y - c) / half;
+                for (int x = 0; x < n; ++x) {
+                    const qreal u = std::abs(x - c) / half;
+                    const int a = qRound(255 * falloff(qMax(u, v), hardness));
+                    line[x] = qRgba(a, a, a, a);
+                }
+            }
+            m_squareCache = sq;
+            m_squareCacheKey = key;
+        }
+        p.drawImage(QRectF(-diameter / 2.0, -diameter / 2.0, diameter, diameter), m_squareCache);
+    } else if (!m_tipCoverage.isNull()) {
+        const qreal scale = diameter / qMax(m_tipCoverage.width(), m_tipCoverage.height());
+        const QSizeF s(m_tipCoverage.width() * scale, m_tipCoverage.height() * scale);
+        p.drawImage(QRectF(QPointF(-s.width() / 2.0, -s.height() / 2.0), s), m_tipCoverage);
+    }
+    p.end();
+    return mask;
+}
+
+const QImage &KisToolCloneStamp::dabMask(qreal diameter, qreal angleDeg, qreal alpha) const
+{
+    const QString key = QString("%1/%2/%3/%4/%5/%6/%7/%8")
+                            .arg(int(m_tipShape))
+                            .arg(qRound(diameter * 4))
+                            .arg(m_brushHardness)
+                            .arg(qRound(angleDeg))
+                            .arg(m_roundness)
+                            .arg(qRound(alpha * 255))
+                            .arg(m_tipCoverage.cacheKey())
+                            .arg(m_tipName);
+    auto it = m_dabCache.find(key);
+    if (it == m_dabCache.end()) {
+        if (m_dabCache.size() > 96) {
+            m_dabCache.clear(); // parameters changed; keep memory bounded
+        }
+        it = m_dabCache.insert(key, buildDabMask(diameter, angleDeg, alpha));
+    }
+    return it.value();
+}
+
+QPainterPath KisToolCloneStamp::tipOutline(const QPointF &center, qreal diameter) const
+{
+    QPainterPath base;
+    const qreal r = diameter / 2.0;
+    if (m_tipShape == TipShape::Round) {
+        base.addEllipse(QPointF(0, 0), r, r);
+    } else if (m_tipShape == TipShape::Square || m_tipCoverage.isNull()) {
+        base.addRect(QRectF(-r, -r, diameter, diameter));
+    } else {
+        const qreal scale = diameter / qMax(m_tipCoverage.width(), m_tipCoverage.height());
+        const qreal w = m_tipCoverage.width() * scale, h = m_tipCoverage.height() * scale;
+        base.addRect(QRectF(-w / 2.0, -h / 2.0, w, h));
+    }
+    QTransform t;
+    t.translate(center.x(), center.y());
+    t.rotate(m_angle);
+    t.scale(1.0, qBound(1, m_roundness, 100) / 100.0);
+    return t.map(base);
+}
+
+void KisToolCloneStamp::setTipResource(KoResourceSP resource)
+{
+    KisBrushSP brush = resource.dynamicCast<KisBrush>();
+    if (!brush) {
+        return;
+    }
+    m_tipCoverage = tipCoverageFromBrush(brush);
+    m_tipName = brush->name();
+    m_previewCache = QImage();
+    if (m_hasHoverPoint) {
+        updateOutline(m_hoverPoint);
+    }
+}
+
+void KisToolCloneStamp::applyPreset(Preset preset)
+{
+    m_angle = 0;
+    m_roundness = 100;
+    m_randomAngle = false;
+    m_airbrush = false;
+    m_flow = 100;
+    m_spacing = 10;
+    switch (preset) {
+    case PresetRoundHard:
+        m_tipShape = TipShape::Round;
+        m_brushHardness = 1.0;
+        break;
+    case PresetRoundSoft:
+        m_tipShape = TipShape::Round;
+        m_brushHardness = 0.0;
+        break;
+    case PresetSquare:
+        m_tipShape = TipShape::Square;
+        m_brushHardness = 0.9;
+        break;
+    case PresetPainterly:
+        m_tipShape = TipShape::Bitmap;
+        m_flow = 60;
+        m_spacing = 15;
+        m_randomAngle = true;
+        if (m_tipCoverage.isNull()) {
+            // pick a textured tip from the installed brushes
+            KisResourceModel model(ResourceType::Brushes);
+            const QStringList wanted = {"chalk", "bristle", "charcoal", "texture", "rough"};
+            for (const QString &w : wanted) {
+                for (int row = 0; row < model.rowCount() && m_tipCoverage.isNull(); ++row) {
+                    KoResourceSP res = model.resourceForIndex(model.index(row, 0));
+                    if (res && res->name().contains(w, Qt::CaseInsensitive)) {
+                        setTipResource(res);
+                        if (m_tipChooser) {
+                            m_tipChooser->setCurrentResource(res);
+                        }
+                    }
+                }
+            }
+        }
+        break;
+    case PresetAirbrush:
+        m_tipShape = TipShape::Round;
+        m_brushHardness = 0.0;
+        m_flow = 8;
+        m_spacing = 5;
+        m_airbrush = true;
+        break;
+    }
+    syncOptionWidgets();
+    if (m_hasHoverPoint) {
+        updateOutline(m_hoverPoint);
+    }
+}
+
+void KisToolCloneStamp::syncOptionWidgets()
+{
+    auto setSlider = [](KisSliderSpinBox *s, int v) {
+        if (s) {
+            QSignalBlocker b(s);
+            s->setValue(v);
+        }
+    };
+    if (m_shapeCombo) {
+        QSignalBlocker b(m_shapeCombo);
+        m_shapeCombo->setCurrentIndex(int(m_tipShape));
+    }
+    setSlider(m_sizeSlider, m_brushSize);
+    setSlider(m_hardnessSlider, qRound(m_brushHardness * 100));
+    setSlider(m_opacitySlider, m_brushOpacity);
+    setSlider(m_flowSlider, m_flow);
+    setSlider(m_angleSlider, m_angle);
+    setSlider(m_roundnessSlider, m_roundness);
+    setSlider(m_spacingSlider, m_spacing);
+    setSlider(m_rateSlider, m_airbrushRate);
+    if (m_randomAngleCheck) {
+        QSignalBlocker b(m_randomAngleCheck);
+        m_randomAngleCheck->setChecked(m_randomAngle);
+    }
+    if (m_airbrushCheck) {
+        QSignalBlocker b(m_airbrushCheck);
+        m_airbrushCheck->setChecked(m_airbrush);
+    }
+    if (m_hardnessSlider) {
+        m_hardnessSlider->setEnabled(m_tipShape != TipShape::Bitmap);
+    }
+    if (m_tipChooser) {
+        m_tipChooser->setVisible(m_tipShape == TipShape::Bitmap);
+    }
+    if (m_rateSlider) {
+        m_rateSlider->setEnabled(m_airbrush);
+    }
+}
+
+// ---------------------------------------------------------------- stroke
 
 void KisToolCloneStamp::beginStroke(const QPointF &docPoint)
 {
-    if (!m_hasSource) {
+    if (!m_hasSource || !m_sourceSnapshot) {
+        showMessage(i18n("Clone Stamp: Ctrl+click to set a source point first."));
         return;
     }
     KisNodeSP node = currentNode();
     if (!isValidPaintLayer(node)) {
+        showMessage(i18n("Clone Stamp: select a paint layer to paint on."));
         return;
     }
+    if (!node->isEditable()) {
+        showMessage(i18n("Clone Stamp: the active layer is locked or hidden."));
+        return;
+    }
+    if (m_tipShape == TipShape::Bitmap && m_tipCoverage.isNull()) {
+        showMessage(i18n("Clone Stamp: choose a brush tip first."));
+        return;
+    }
+
+    const QRect canvasBounds = image()->bounds();
+    const qint64 pixels = qint64(canvasBounds.width()) * canvasBounds.height();
+    if (pixels <= 0 || pixels > MAX_ACCUMULATOR_PIXELS) {
+        showMessage(i18n("Clone Stamp: the image is too large."));
+        return;
+    }
+    m_accImage = QImage(canvasBounds.width(), canvasBounds.height(), QImage::Format_Alpha8);
+    if (m_accImage.isNull()) {
+        showMessage(i18n("Clone Stamp: not enough memory for this stroke."));
+        return;
+    }
+    m_accImage.fill(0);
+    m_accLeft = canvasBounds.x();
+    m_accTop = canvasBounds.y();
+    m_useAccumulator = true;
+    m_strokeMask = new KisSelection();
+    m_pendingRect = QRect();
+    m_flushClock.start();
 
     if (!(m_aligned && m_hasStrokeOffset)) {
         m_strokeOffset = QPointF(m_sourcePoint.x() - docPoint.x(), m_sourcePoint.y() - docPoint.y());
@@ -250,247 +479,168 @@ void KisToolCloneStamp::beginStroke(const QPointF &docPoint)
     }
     m_hasLastDabPoint = false;
     m_isPainting = true;
-    m_transaction.reset(new KisTransaction(node->paintDevice()));
 
-    // Allocate the stroke accumulator (see m_accImage in the header). Where
-    // the Python plugin refuses the stroke outright on an oversized canvas
-    // (it can surface a user-facing error), a KisTool has no comparable
-    // channel -- so here we fall back to the old per-dab immediate
-    // compositing instead: degraded (opacity can build up past the ceiling
-    // where dabs overlap) but working, which beats a silently dead tool.
-    m_accBounds = QRect();
-    const QRect canvasBounds = image()->bounds();
-    const qint64 pixels = qint64(canvasBounds.width()) * canvasBounds.height();
-    m_useAccumulator = pixels > 0 && pixels <= MAX_ACCUMULATOR_PIXELS;
-    if (m_useAccumulator) {
-        m_accImage = QImage(canvasBounds.width(), canvasBounds.height(),
-                            QImage::Format_ARGB32_Premultiplied);
-        if (m_accImage.isNull()) {
-            // Allocation failure (out of memory) -- same fallback.
-            m_useAccumulator = false;
-        } else {
-            m_accImage.fill(Qt::transparent);
-            m_accLeft = canvasBounds.x();
-            m_accTop = canvasBounds.y();
-        }
+    KisPaintDeviceSP dst = node->paintDevice();
+    m_dstOriginal = new KisPaintDevice(*dst); // copy-on-write, see header
+    m_transaction.reset(new KisTransaction(dst));
+
+    if (m_airbrush) {
+        m_airbrushTimer.start(qMax(10, 1000 / qMax(1, m_airbrushRate)));
     }
 }
 
-void KisToolCloneStamp::stampDabAt(const QPointF &dstCenter)
+void KisToolCloneStamp::stampDab(const QPointF &dstCenter, qreal pressure)
 {
-    if (!m_isPainting || !m_hasSource) {
+    if (!m_isPainting || !m_useAccumulator) {
         return;
     }
-    if (m_useAccumulator) {
-        recordDabToAccumulator(dstCenter);
-    } else {
-        stampDabImmediate(dstCenter);
+    const qreal diameter = qMax(qreal(1.0), m_brushSize * (m_pressureSize ? pressure : 1.0));
+    const qreal alpha = m_flow / 100.0 * (m_pressureFlow ? pressure : 1.0);
+    qreal angle = m_angle;
+    if (m_randomAngle) {
+        // 5-degree steps: 72 cached rotations instead of a new mask per dab
+        angle += 5 * QRandomGenerator::global()->bounded(72);
     }
-}
+    const QImage *mask = &dabMask(diameter, angle, alpha);
 
-void KisToolCloneStamp::recordDabToAccumulator(const QPointF &dstCenter)
-{
-    // No paint-device access at all here -- a dab during a stroke is just a
-    // soft circle drawn into the in-memory accumulator; the actual clone
-    // (read source, mask, composite, write) happens once per stroke in
-    // finalizeStroke. Mirrors _paint_dab_to_accumulator in
-    // clonestamp_core.py.
-    const int size = qMax(1, m_brushSize);
-    const qreal half = size / 2.0;
-    const QRect dabRect(qRound(dstCenter.x() - half), qRound(dstCenter.y() - half), size, size);
-
-    m_accBounds = m_accBounds.isNull() ? dabRect : m_accBounds.united(dabRect);
-
-    const int localX = dabRect.x() - m_accLeft;
-    const int localY = dabRect.y() - m_accTop;
-    const QRect clip = QRect(localX, localY, size, size).intersected(m_accImage.rect());
+    const QRect dabRect(qRound(dstCenter.x() - mask->width() / 2.0),
+                        qRound(dstCenter.y() - mask->height() / 2.0),
+                        mask->width(), mask->height());
+    const QRect local = dabRect.translated(-m_accLeft, -m_accTop);
+    const QRect clip = local.intersected(m_accImage.rect());
     if (clip.isEmpty()) {
         return;
     }
-
-    // The circle is always built at full brush size and only the clipped
-    // sub-rect of it is drawn, so the soft falloff stays centered on the
-    // true brush circle even when the dab is cut off by a canvas edge.
     QPainter painter(&m_accImage);
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-    painter.drawImage(clip.topLeft(), softCircle(),
-                      QRect(clip.x() - localX, clip.y() - localY, clip.width(), clip.height()));
+    painter.drawImage(clip.topLeft(), *mask, clip.translated(-local.topLeft()));
     painter.end();
+
+    m_pendingRect |= clip.translated(m_accLeft, m_accTop);
 }
 
-void KisToolCloneStamp::stampDabImmediate(const QPointF &dstCenter)
+void KisToolCloneStamp::strokeTo(const QPointF &point, qreal pressure)
 {
-    // Fallback path for canvases too large for the accumulator (see
-    // beginStroke): read/mask/composite/write each dab directly. Overlapping
-    // dabs at partial opacity can build past the opacity ceiling here --
-    // known limitation of this path only.
+    // Dabs are laid out along the path at the spacing distance, so fast
+    // mouse moves leave no gaps; pressure is interpolated between events.
+    m_lastCursorPoint = point;
+    m_lastCursorPressure = pressure;
+    if (!m_hasLastDabPoint) {
+        stampDab(point, pressure);
+        m_lastDabPoint = point;
+        m_lastDabPressure = pressure;
+        m_hasLastDabPoint = true;
+        return;
+    }
+    const qreal size = qMax(qreal(1.0), m_brushSize * (m_pressureSize ? pressure : 1.0));
+    const qreal step = qMax(qreal(1.0), size * m_spacing / 100.0);
+    QPointF from = m_lastDabPoint;
+    qreal fromPressure = m_lastDabPressure;
+    QPointF delta = point - from;
+    qreal dist = std::hypot(delta.x(), delta.y());
+    while (dist >= step) {
+        const qreal t = step / dist;
+        from += delta * t;
+        fromPressure += (pressure - fromPressure) * t;
+        stampDab(from, fromPressure);
+        delta = point - from;
+        dist = std::hypot(delta.x(), delta.y());
+    }
+    m_lastDabPoint = from;
+    m_lastDabPressure = fromPressure;
+
+    // Composite at most ~60 times per second; a pending timer catches the
+    // last dabs when the pointer stops.
+    const qint64 sinceFlush = m_flushClock.elapsed();
+    if (sinceFlush >= 16) {
+        flushComposite();
+    } else if (!m_flushTimer.isActive()) {
+        m_flushTimer.start(int(16 - sinceFlush));
+    }
+}
+
+void KisToolCloneStamp::flushComposite()
+{
+    m_flushTimer.stop();
+    if (m_pendingRect.isEmpty() || !m_isPainting) {
+        m_pendingRect = QRect();
+        return;
+    }
+    compositeLive(m_pendingRect);
+    m_pendingRect = QRect();
+    m_flushClock.restart();
+}
+
+void KisToolCloneStamp::airbrushTick()
+{
+    // Airbrush: keep depositing at the cursor while the button is held,
+    // even without movement.
+    if (m_isPainting && m_airbrush) {
+        stampDab(m_lastCursorPoint, m_lastCursorPressure);
+        flushComposite();
+    }
+}
+
+void KisToolCloneStamp::compositeLive(const QRect &dstRectIn)
+{
+    // result = original OVER (source masked by stroke coverage x opacity),
+    // recomputed for the area one dab touched and written straight to the
+    // layer, in the layer's own pixel format.
     KisNodeSP dstNode = currentNode();
-    if (!isValidPaintLayer(dstNode)) {
+    if (!image() || !m_sourceSnapshot || !m_dstOriginal || !m_strokeMask || !canPaintOn(dstNode)) {
         return;
     }
-    KisPaintDeviceSP dstDevice = dstNode->paintDevice();
-
-    const QPointF srcCenter(dstCenter.x() + m_strokeOffset.x(), dstCenter.y() + m_strokeOffset.y());
-
-    const int size = qMax(1, m_brushSize);
-    const qreal half = size / 2.0;
-
-    QRect srcRect(qRound(srcCenter.x() - half), qRound(srcCenter.y() - half), size, size);
-    QRect dstRect(qRound(dstCenter.x() - half), qRound(dstCenter.y() - half), size, size);
-
-    const QRect canvasBounds = image()->bounds();
-    const QRect srcClip = srcRect.intersected(canvasBounds);
-    const QRect dstClip = dstRect.intersected(canvasBounds);
-
-    // Shrink both rects by whichever side needs it more, so they stay the
-    // same size and pixel-aligned even when one side runs off the canvas.
-    const int left = qMax(srcClip.left() - srcRect.left(), dstClip.left() - dstRect.left());
-    const int top = qMax(srcClip.top() - srcRect.top(), dstClip.top() - dstRect.top());
-    const int right = qMax(srcRect.right() - srcClip.right(), dstRect.right() - dstClip.right());
-    const int bottom = qMax(srcRect.bottom() - srcClip.bottom(), dstRect.bottom() - dstClip.bottom());
-
-    const int w = size - left - right;
-    const int h = size - top - bottom;
-    if (w <= 0 || h <= 0) {
-        return; // entirely off one of the two areas; skip this dab
-    }
-
-    const int dstX = dstRect.x() + left;
-    const int dstY = dstRect.y() + top;
-
-    QImage srcImage = readSourceImage(QRect(srcRect.x() + left, srcRect.y() + top, w, h));
-    if (srcImage.isNull()) {
+    const QRect bounds = image()->bounds();
+    const QPoint offset(qRound(m_strokeOffset.x()), qRound(m_strokeOffset.y()));
+    // Only where both destination and source lie on the canvas.
+    const QRect dstRect = dstRectIn & bounds & bounds.translated(-offset);
+    if (dstRect.isEmpty()) {
         return;
     }
+    KisPaintDeviceSP dst = dstNode->paintDevice();
 
-    QByteArray dstBytes(w * h * static_cast<int>(dstDevice->pixelSize()), 0);
-    dstDevice->readBytes(reinterpret_cast<quint8 *>(dstBytes.data()), dstX, dstY, w, h);
-    // Krita's 8-bit RGBA colorspace stores straight BGRA bytes in memory,
-    // matching QImage::Format_ARGB32 byte-for-byte on little-endian.
-    QImage dstImage(reinterpret_cast<const uchar *>(dstBytes.constData()), w, h, QImage::Format_ARGB32);
-    dstImage = dstImage.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    // 1. Restore the pre-stroke pixels of this area.
+    KisPainter::copyAreaOptimized(dstRect.topLeft(), m_dstOriginal, dst, dstRect);
 
-    // Mask with the matching sub-rect of the FULL-size circle -- never a
-    // circle rebuilt at the clipped w x h, which would re-center the falloff
-    // on the clipped rectangle and make it visibly asymmetric near edges.
-    // DestinationIn keeps srcImage's colors but multiplies its alpha by the
-    // circle's alpha (falloff x opacity), i.e. per-pixel feathering.
-    QPainter maskPainter(&srcImage);
-    maskPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-    maskPainter.drawImage(QPoint(0, 0), softCircle(), QRect(left, top, w, h));
-    maskPainter.end();
+    // 2. Stroke coverage of this area into the stroke's selection mask
+    //    (Alpha8 rows copied as-is).
+    const QRect local = dstRect.translated(-m_accLeft, -m_accTop);
+    QByteArray alpha(dstRect.width() * dstRect.height(), Qt::Uninitialized);
+    for (int y = 0; y < local.height(); ++y) {
+        memcpy(alpha.data() + y * local.width(), m_accImage.constScanLine(local.y() + y) + local.x(),
+               size_t(local.width()));
+    }
+    m_strokeMask->pixelSelection()->writeBytes(reinterpret_cast<const quint8 *>(alpha.constData()), dstRect);
 
-    QPainter painter(&dstImage);
-    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-    painter.drawImage(0, 0, srcImage);
-    painter.end();
+    // 3. Source over it through the mask, opacity applied by the painter
+    //    (KisPainter converts color spaces).
+    KisPainter gc(dst, m_strokeMask);
+    gc.setCompositeOpId(COMPOSITE_OVER);
+    gc.setOpacityF(qBound(0, m_brushOpacity, 100) / 100.0);
+    gc.bitBlt(dstRect.topLeft(), m_sourceSnapshot, dstRect.translated(offset));
+    gc.end();
 
-    const QImage resultImage = dstImage.convertToFormat(QImage::Format_ARGB32);
-    dstDevice->writeBytes(resultImage.constBits(), dstX, dstY, w, h);
-    dstDevice->setDirty(QRect(dstX, dstY, w, h));
+    dst->setDirty(dstRect);
 }
 
 void KisToolCloneStamp::finalizeStroke()
 {
-    // Composite the whole stroke in ONE pass: multiply the source by the
-    // accumulated stroke alpha, then SourceOver onto the destination. This
-    // is what keeps partial opacity honest -- however many dabs overlapped,
-    // the accumulator's alpha never exceeds the chosen opacity, so neither
-    // does the paint. Port of finalize_stroke in clonestamp_core.py.
-
-    // Detach the accumulator state up front so every exit path below leaves
-    // the tool clean (QImage is implicitly shared; this copy is cheap).
-    const QImage accImage = m_accImage;
-    const QRect accBounds = m_accBounds;
-    const bool useAcc = m_useAccumulator;
+    // Every dab was already composited onto the layer by compositeLive; all
+    // that is left is dropping the per-stroke buffers.
+    m_airbrushTimer.stop();
+    m_flushTimer.stop();
+    m_pendingRect = QRect();
+    m_strokeMask = nullptr;
     m_accImage = QImage();
-    m_accBounds = QRect();
     m_useAccumulator = false;
-
-    if (!useAcc || accImage.isNull() || accBounds.isNull()) {
-        return; // immediate path already wrote everything, or no dabs landed
-    }
-    if (!image()) {
-        return;
-    }
-    KisNodeSP dstNode = currentNode();
-    if (!isValidPaintLayer(dstNode)) {
-        return;
-    }
-    KisPaintDeviceSP dstDevice = dstNode->paintDevice();
-
-    const QRect docBounds = image()->bounds();
-    const QRect maskRect = accBounds.intersected(docBounds);
-    if (maskRect.isEmpty()) {
-        return;
-    }
-
-    // Source position = destination + stroke offset.
-    const QRect srcFull = maskRect.translated(qRound(m_strokeOffset.x()), qRound(m_strokeOffset.y()));
-    const QRect dstFull = maskRect;
-
-    // Both sides clip against the canvas (reads outside a device's content
-    // return transparent anyway, and dabs were only ever recorded inside
-    // canvas bounds).
-    const QRect srcClip = srcFull.intersected(docBounds);
-    const QRect dstClip = dstFull.intersected(docBounds);
-    if (srcClip.isEmpty() || dstClip.isEmpty()) {
-        return;
-    }
-
-    // Shrink both rects by whichever side needs it more, so they stay the
-    // same size and pixel-aligned even when one side runs off the canvas.
-    const int left = qMax(srcClip.left() - srcFull.left(), dstClip.left() - dstFull.left());
-    const int top = qMax(srcClip.top() - srcFull.top(), dstClip.top() - dstFull.top());
-    const int right = qMax(srcFull.right() - srcClip.right(), dstFull.right() - dstClip.right());
-    const int bottom = qMax(srcFull.bottom() - srcClip.bottom(), dstFull.bottom() - dstClip.bottom());
-
-    const int w = maskRect.width() - left - right;
-    const int h = maskRect.height() - top - bottom;
-    if (w <= 0 || h <= 0) {
-        return;
-    }
-
-    const QRect srcRect(srcFull.x() + left, srcFull.y() + top, w, h);
-    const QRect dstRect(dstFull.x() + left, dstFull.y() + top, w, h);
-
-    // Read source once -- from the frozen snapshot when available (see
-    // takeSourceSnapshot), else live.
-    QImage srcImage = readSourceImage(srcRect);
-    if (srcImage.isNull()) {
-        return;
-    }
-
-    // Read destination once.
-    QByteArray dstBytes(w * h * static_cast<int>(dstDevice->pixelSize()), 0);
-    dstDevice->readBytes(reinterpret_cast<quint8 *>(dstBytes.data()), dstRect.x(), dstRect.y(), w, h);
-    QImage dstImage(reinterpret_cast<const uchar *>(dstBytes.constData()), w, h, QImage::Format_ARGB32);
-    dstImage = dstImage.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-
-    // Slice the accumulator: m_accLeft/m_accTop is the accumulator origin
-    // (= canvas origin), not accBounds.
-    const QImage maskSlice = accImage.copy(dstRect.x() - m_accLeft, dstRect.y() - m_accTop, w, h);
-
-    // Step 1: multiply source by the stroke mask's alpha (DestinationIn
-    // keeps srcImage's colors, scales its alpha per-pixel by the mask's).
-    QPainter maskPainter(&srcImage);
-    maskPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-    maskPainter.drawImage(0, 0, maskSlice);
-    maskPainter.end();
-
-    // Step 2: composite masked source over destination (SourceOver).
-    QPainter painter(&dstImage);
-    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-    painter.drawImage(0, 0, srcImage);
-    painter.end();
-
-    const QImage resultImage = dstImage.convertToFormat(QImage::Format_ARGB32);
-    dstDevice->writeBytes(resultImage.constBits(), dstRect.x(), dstRect.y(), w, h);
-    dstDevice->setDirty(dstRect);
+    m_dstOriginal = nullptr;
 }
+
+// ---------------------------------------------------------------- cursor
 
 void KisToolCloneStamp::updateOutline(const QPointF &pixelPoint)
 {
+    const QPointF moveVector = m_hasHoverPoint ? pixelPoint - m_hoverPoint : QPointF();
     m_hoverPoint = pixelPoint;
     m_hasHoverPoint = true;
 
@@ -503,24 +653,43 @@ void KisToolCloneStamp::updateOutline(const QPointF &pixelPoint)
         }
     }
 
-    if (!image()) {
+    KisCanvas2 *kisCanvas = qobject_cast<KisCanvas2 *>(canvas());
+    if (!image() || !kisCanvas) {
         return;
     }
 
-    const qreal half = qMax(1, m_brushSize) / 2.0;
-    QRectF pixelRect(pixelPoint.x() - half, pixelPoint.y() - half, half * 2, half * 2);
-    if (m_hasPreviewSource) {
-        QRectF srcRect(m_previewSourcePoint.x() - half, m_previewSourcePoint.y() - half, half * 2, half * 2);
-        pixelRect |= srcRect;
-    }
-    pixelRect = pixelRect.adjusted(-4, -4, 4, 4);
-    const QRectF docRect = image()->pixelToDocument(pixelRect);
+    // Same mechanism as KisToolPaint::requestUpdateOutline: overlay-only
+    // updates through updateCanvasToolOutlineDoc, which repaints right away
+    // instead of going through the compressed projection+overlay update that
+    // updateCanvas() uses (that one made the cursor trail behind the mouse).
+    // The destination and source rings are updated as two small rects, not
+    // one box spanning both.
+    const qreal half = maskSide(qMax(1, m_brushSize)) / 2.0;
+    const qreal moveDistance = std::hypot(moveVector.x(), moveVector.y());
+    auto ringDocRect = [&](const QPointF &center) {
+        QRectF r(center.x() - half, center.y() - half, half * 2, half * 2);
+        r.adjust(-4, -4, 4, 4);
+        // Update-ahead (see KisToolPaint, bug 476300): also cover where the
+        // ring will most likely be next, so a repaint arriving after the
+        // following move doesn't tear the outline.
+        if (moveDistance < 0.5 * qMax(r.width(), r.height())) {
+            r |= r.translated(1.1 * moveVector);
+        }
+        return image()->pixelToDocument(r);
+    };
 
-    if (!m_lastOutlineUpdateRect.isEmpty()) {
-        canvas()->updateCanvas(m_lastOutlineUpdateRect);
+    QVector<QRectF> rects;
+    rects << ringDocRect(pixelPoint);
+    if (m_hasPreviewSource) {
+        rects << ringDocRect(m_previewSourcePoint);
     }
-    canvas()->updateCanvas(docRect);
-    m_lastOutlineUpdateRect = docRect;
+    for (const QRectF &r : std::as_const(m_lastOutlineDocRects)) {
+        kisCanvas->updateCanvasToolOutlineDoc(r);
+    }
+    for (const QRectF &r : std::as_const(rects)) {
+        kisCanvas->updateCanvasToolOutlineDoc(r);
+    }
+    m_lastOutlineDocRects = rects;
 }
 
 QImage KisToolCloneStamp::buildPreviewPatch(const QPointF &srcCenterPixels) const
@@ -528,120 +697,108 @@ QImage KisToolCloneStamp::buildPreviewPatch(const QPointF &srcCenterPixels) cons
     if (!image()) {
         return QImage();
     }
-
-    const int size = qMax(1, m_brushSize);
-    const qreal half = size / 2.0;
-
-    const QRect srcRect(qRound(srcCenterPixels.x() - half), qRound(srcCenterPixels.y() - half), size, size);
+    // The preview shows the tip's shape (at full flow, without jitter).
+    const QImage &mask = dabMask(qMax(1, m_brushSize), m_angle, 1.0);
+    const QRect srcRect(qRound(srcCenterPixels.x() - mask.width() / 2.0),
+                        qRound(srcCenterPixels.y() - mask.height() / 2.0),
+                        mask.width(), mask.height());
     const QRect clip = srcRect.intersected(image()->bounds());
     if (clip.isEmpty()) {
         return QImage();
     }
-
-    QImage clipImage = readSourceImage(clip);
+    // Convert a block around the source once; moving inside it only crops.
+    if (m_previewSrcImage.isNull() || !m_previewSrcRect.contains(clip)) {
+        const int margin = qMax(32, mask.width() / 2);
+        m_previewSrcRect = clip.adjusted(-margin, -margin, margin, margin).intersected(image()->bounds());
+        m_previewSrcImage = readSourceImage(m_previewSrcRect);
+    }
+    const QImage clipImage = m_previewSrcImage.copy(clip.translated(-m_previewSrcRect.topLeft()));
     if (clipImage.isNull()) {
         return QImage();
     }
-
-    // Compose at full brush size with the in-bounds content drawn at its
-    // offset, then mask with the full-size circle -- so the soft falloff
-    // stays centered on the true brush circle even when the source area is
-    // partly off-canvas (masking the clipped rect directly would re-center
-    // the falloff on the clipped rectangle).
-    QImage patch(size, size, QImage::Format_ARGB32_Premultiplied);
+    QImage patch(mask.size(), QImage::Format_ARGB32_Premultiplied);
     patch.fill(Qt::transparent);
     QPainter painter(&patch);
     painter.drawImage(clip.x() - srcRect.x(), clip.y() - srcRect.y(), clipImage);
     painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-    painter.drawImage(0, 0, softCircle());
+    painter.drawImage(0, 0, mask);
     painter.end();
     return patch;
 }
 
 QImage KisToolCloneStamp::cachedPreviewPatch(const QPointF &srcCenterPixels) const
 {
-    // paint() runs at Krita's repaint cadence; rebuilding the preview patch
-    // (device read + mask) every time is the expensive part, so refresh it
-    // at most every 200ms and reuse the last frame in between. The content
-    // can lag the cursor by up to that interval -- the same trade-off the
-    // Python docker's _refreshPreviewCache makes at the same ~5Hz budget.
-    // Brush parameter changes refresh immediately so the preview never
-    // shows a stale size/hardness/opacity.
-    const bool stale = m_previewCache.isNull()
-        || !m_previewCacheTimer.isValid()
-        || m_previewCacheTimer.elapsed() >= 200
-        || m_previewCacheSize != m_brushSize
-        || m_previewCacheHardness != m_brushHardness
-        || m_previewCacheOpacity != m_brushOpacity;
-    if (stale) {
+    const QPoint srcPos = srcCenterPixels.toPoint();
+    const QString key = QString("%1,%2/%3/%4/%5/%6/%7/%8")
+                            .arg(srcPos.x()).arg(srcPos.y())
+                            .arg(int(m_tipShape)).arg(m_brushSize).arg(m_brushHardness)
+                            .arg(m_angle).arg(m_roundness).arg(m_tipCoverage.cacheKey());
+    if (m_previewCache.isNull() || key != m_previewCacheKey) {
         m_previewCache = buildPreviewPatch(srcCenterPixels);
-        m_previewCacheTimer.start();
-        m_previewCacheSize = m_brushSize;
-        m_previewCacheHardness = m_brushHardness;
-        m_previewCacheOpacity = m_brushOpacity;
+        m_previewCacheKey = key;
     }
     return m_previewCache;
 }
 
 void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
 {
+    Q_UNUSED(converter);
     if (!m_hasHoverPoint || !image()) {
         return;
     }
-    const qreal half = qMax(1, m_brushSize) / 2.0;
-    const QRectF pixelRect(m_hoverPoint.x() - half, m_hoverPoint.y() - half, half * 2, half * 2);
-    const QRectF docRect = image()->pixelToDocument(pixelRect);
-    const QRectF viewRect = converter.documentToView(docRect);
+    const qreal diameter = qMax(1, m_brushSize);
 
-    if (m_hasPreviewSource) {
+    if (m_hasPreviewSource && m_previewOpacity > 0 && !(m_isPainting && m_previewAutoHide)) {
         const QImage preview = cachedPreviewPatch(m_previewSourcePoint);
         if (!preview.isNull()) {
+            const QRectF pixelRect(m_hoverPoint.x() - preview.width() / 2.0,
+                                   m_hoverPoint.y() - preview.height() / 2.0,
+                                   preview.width(), preview.height());
             gc.save();
-            gc.setOpacity(0.6);
-            gc.drawImage(viewRect, preview);
+            gc.setOpacity(m_previewOpacity / 100.0);
+            gc.drawImage(pixelToView(pixelRect), preview);
             gc.restore();
         }
     }
 
-    {
-        const QPointF dstCenter = viewRect.center();
-        const qreal dstCrossRadius = 6.0;
+    // Tip outlines and crosshairs go through Krita's own tool-outline
+    // renderer (GPU-drawn on the OpenGL canvas, inverted against the image)
+    // -- the same path and look as the regular brush outline.
+    // 6 screen pixels expressed in image pixels at the current zoom.
+    const qreal viewPerPixel = pixelToView(QPointF(1.0, 0.0)).x() - pixelToView(QPointF(0.0, 0.0)).x();
+    const qreal crossPx = 6.0 / qMax(qreal(0.01), viewPerPixel);
+    auto addTip = [&](QPainterPath &path, const QPointF &c) {
+        path.addPath(tipOutline(c, diameter));
+        path.moveTo(c.x() - crossPx, c.y());
+        path.lineTo(c.x() + crossPx, c.y());
+        path.moveTo(c.x(), c.y() - crossPx);
+        path.lineTo(c.x(), c.y() + crossPx);
+    };
+    QPainterPath outline;
+    addTip(outline, m_hoverPoint);
+    if (m_hasPreviewSource) {
+        addTip(outline, m_previewSourcePoint);
+    }
+    paintToolOutline(&gc, pixelToView(KisOptimizedBrushOutline(outline)));
 
+    // Dashed inner outline marking the fully-hard zone of round/square tips.
+    if (m_tipShape != TipShape::Bitmap && m_brushHardness < 0.99) {
+        const QPainterPath hard = pixelToView(tipOutline(m_hoverPoint, qMax(qreal(3.0), diameter * m_brushHardness)));
         gc.save();
-        gc.setPen(QPen(Qt::white, 1));
         gc.setBrush(Qt::NoBrush);
-        gc.drawEllipse(viewRect);
-        gc.drawLine(QPointF(dstCenter.x() - dstCrossRadius, dstCenter.y()), QPointF(dstCenter.x() + dstCrossRadius, dstCenter.y()));
-        gc.drawLine(QPointF(dstCenter.x(), dstCenter.y() - dstCrossRadius), QPointF(dstCenter.x(), dstCenter.y() + dstCrossRadius));
-
-        // Dashed inner ring marking the fully-hard zone of the brush --
-        // same readout the Python docker's cursor pixmap draws, so the two
-        // implementations look alike.
-        const qreal hardnessDiameter = qMax(qreal(3.0), viewRect.width() * m_brushHardness);
-        const qreal inset = (viewRect.width() - hardnessDiameter) / 2.0;
-        const QRectF hardRect(viewRect.x() + inset, viewRect.y() + inset,
-                              hardnessDiameter, hardnessDiameter);
         gc.setPen(QPen(QColor(0, 0, 0, 160), 1, Qt::DashLine));
-        gc.drawEllipse(hardRect.translated(1, 1));
+        gc.drawPath(hard.translated(1, 1));
         gc.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt::DashLine));
-        gc.drawEllipse(hardRect);
+        gc.drawPath(hard);
         gc.restore();
     }
 
     if (m_hasPreviewSource) {
-        const QRectF srcPixelRect(m_previewSourcePoint.x() - half, m_previewSourcePoint.y() - half, half * 2, half * 2);
-        const QRectF srcDocRect = image()->pixelToDocument(srcPixelRect);
-        const QRectF srcViewRect = converter.documentToView(srcDocRect);
-        const QPointF center = srcViewRect.center();
-        const qreal crossRadius = 6.0;
-
-        gc.save();
-        gc.setPen(QPen(QColor(255, 255, 255, 120), 1));
-        gc.setBrush(Qt::NoBrush);
-        gc.drawEllipse(srcViewRect);
-        // Red crosshair for the source point, matching the Python docker's
-        // cursor -- red keeps source and destination instantly
+        // Red accent on the source crosshair keeps source and destination
         // distinguishable at a glance.
+        const QPointF center = pixelToView(m_previewSourcePoint);
+        const qreal crossRadius = 6.0;
+        gc.save();
         gc.setPen(QPen(QColor(255, 0, 0, 110), 2));
         gc.drawLine(QPointF(center.x() - crossRadius, center.y()), QPointF(center.x() + crossRadius, center.y()));
         gc.drawLine(QPointF(center.x(), center.y() - crossRadius), QPointF(center.x(), center.y() + crossRadius));
@@ -649,15 +806,15 @@ void KisToolCloneStamp::paint(QPainter &gc, const KoViewConverter &converter)
     }
 }
 
+// ---------------------------------------------------------------- input
+
 void KisToolCloneStamp::beginPrimaryAction(KoPointerEvent *event)
 {
     const QPointF pixelPoint = convertToPixelCoord(event);
-
     beginStroke(pixelPoint);
     if (m_isPainting) {
-        stampDabAt(pixelPoint);
-        m_lastDabPoint = pixelPoint;
-        m_hasLastDabPoint = true;
+        strokeTo(pixelPoint, event->pressure());
+        flushComposite(); // first dab shows at once
     }
     updateOutline(pixelPoint);
 }
@@ -667,38 +824,25 @@ void KisToolCloneStamp::continuePrimaryAction(KoPointerEvent *event)
     if (!m_isPainting) {
         return;
     }
-
     const QPointF pixelPoint = convertToPixelCoord(event);
-    // Dab spacing scales with brush size: overlapping soft circles union to
-    // a smooth mask, so at 15% of the diameter (well under Photoshop's 25%
-    // default brush spacing) no scalloping is visible, while a 250px brush
-    // stamps ~19x fewer dabs than the old fixed 2px spacing did.
-    const qreal minSpacing = qMax(qreal(2.0), m_brushSize * qreal(0.15));
-    if (m_hasLastDabPoint) {
-        const qreal dx = pixelPoint.x() - m_lastDabPoint.x();
-        const qreal dy = pixelPoint.y() - m_lastDabPoint.y();
-        if ((dx * dx + dy * dy) < (minSpacing * minSpacing)) {
-            return;
-        }
-    }
-
-    stampDabAt(pixelPoint);
-    m_lastDabPoint = pixelPoint;
-    m_hasLastDabPoint = true;
+    strokeTo(pixelPoint, event->pressure());
     updateOutline(pixelPoint);
 }
 
 void KisToolCloneStamp::endPrimaryAction(KoPointerEvent *event)
 {
     Q_UNUSED(event);
-
     if (m_isPainting) {
+        flushComposite();
         m_isPainting = false;
         m_hasLastDabPoint = false;
         finalizeStroke();
         if (m_transaction) {
             m_transaction->commit(image()->undoAdapter());
             m_transaction.reset();
+        }
+        if (m_hasHoverPoint) {
+            updateOutline(m_hoverPoint); // bring the preview back (auto-hide)
         }
     }
 }
@@ -719,7 +863,6 @@ void KisToolCloneStamp::beginAlternateAction(KoPointerEvent *event, AlternateAct
         updateOutline(pixelPoint);
         return;
     }
-
     if (action == ChangeSize) {
         m_isResizing = true;
         m_resizeStartWidgetPos = event->pos();
@@ -727,7 +870,6 @@ void KisToolCloneStamp::beginAlternateAction(KoPointerEvent *event, AlternateAct
         m_resizeStartHardnessPercent = qRound(m_brushHardness * 100);
         return;
     }
-
     KisTool::beginAlternateAction(event, action);
 }
 
@@ -736,31 +878,14 @@ void KisToolCloneStamp::continueAlternateAction(KoPointerEvent *event, Alternate
     if (action == ChangeSize && m_isResizing) {
         const int dx = event->pos().x() - m_resizeStartWidgetPos.x();
         // Screen y grows downward, so negate: dragging up increases
-        // hardness, dragging down softens -- matches Photoshop's on-canvas
-        // brush resize convention.
+        // hardness, dragging down softens -- Photoshop's on-canvas convention.
         const int dy = event->pos().y() - m_resizeStartWidgetPos.y();
-
         m_brushSize = qBound(1, m_resizeStartSize + dx, 2000);
-        const int hardnessPercent = qBound(0, m_resizeStartHardnessPercent - dy, 100);
-        m_brushHardness = hardnessPercent / 100.0;
-
-        if (m_sizeSpin) {
-            QSignalBlocker blocker(m_sizeSpin);
-            m_sizeSpin->setValue(m_brushSize);
-        }
-        if (m_hardnessSpin) {
-            QSignalBlocker blocker(m_hardnessSpin);
-            m_hardnessSpin->setValue(hardnessPercent);
-        }
-        if (m_hardnessSlider) {
-            QSignalBlocker blocker(m_hardnessSlider);
-            m_hardnessSlider->setValue(hardnessPercent);
-        }
-
+        m_brushHardness = qBound(0, m_resizeStartHardnessPercent - dy, 100) / 100.0;
+        syncOptionWidgets();
         updateOutline(m_hoverPoint);
         return;
     }
-
     KisTool::continueAlternateAction(event, action);
 }
 
@@ -770,9 +895,10 @@ void KisToolCloneStamp::endAlternateAction(KoPointerEvent *event, AlternateActio
         m_isResizing = false;
         return;
     }
-
     KisTool::endAlternateAction(event, action);
 }
+
+// ---------------------------------------------------------------- options
 
 QWidget *KisToolCloneStamp::createOptionWidget()
 {
@@ -780,105 +906,203 @@ QWidget *KisToolCloneStamp::createOptionWidget()
         return m_optionWidget;
     }
 
+    // Compact layout: everything fits the Tool Options docker without
+    // scrolling -- sample source first, sliders in two columns.
     QWidget *widget = new QWidget();
     QVBoxLayout *layout = new QVBoxLayout(widget);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(3);
 
-    QHBoxLayout *sizeRow = new QHBoxLayout();
-    sizeRow->addWidget(new QLabel(i18n("Size:")));
-    QSpinBox *sizeSpin = new QSpinBox();
-    sizeSpin->setRange(1, 2000);
-    sizeSpin->setSuffix(i18n(" px"));
-    sizeSpin->setToolTip(i18n("Brush diameter in pixels.\n"
-                              "On canvas: Shift+drag horizontally (right = larger)."));
-    sizeSpin->setValue(m_brushSize);
-    connect(sizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
-        m_brushSize = value;
-    });
-    sizeRow->addWidget(sizeSpin);
-    layout->addLayout(sizeRow);
-    m_sizeSpin = sizeSpin;
-
-    QHBoxLayout *hardnessRow = new QHBoxLayout();
-    hardnessRow->addWidget(new QLabel(i18n("Hardness:")));
-    // Slider + spinbox pair, same as the Python docker's hardness row.
-    const QString hardnessTip = i18n(
-        "Edge softness: 100% = crisp hard edge, 0% = fades from the center outward.\n"
-        "On canvas: Shift+drag vertically (up = harder, down = softer).");
-    QSlider *hardnessSlider = new QSlider(Qt::Horizontal);
-    hardnessSlider->setRange(0, 100);
-    hardnessSlider->setValue(qRound(m_brushHardness * 100));
-    hardnessSlider->setToolTip(hardnessTip);
-    hardnessRow->addWidget(hardnessSlider);
-    QSpinBox *hardnessSpin = new QSpinBox();
-    hardnessSpin->setRange(0, 100);
-    hardnessSpin->setSuffix(i18n(" %"));
-    hardnessSpin->setToolTip(hardnessTip);
-    hardnessSpin->setValue(qRound(m_brushHardness * 100));
-    connect(hardnessSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this, hardnessSlider](int value) {
-        m_brushHardness = value / 100.0;
-        QSignalBlocker blocker(hardnessSlider);
-        hardnessSlider->setValue(value);
-    });
-    connect(hardnessSlider, &QSlider::valueChanged, this, [this, hardnessSpin](int value) {
-        m_brushHardness = value / 100.0;
-        QSignalBlocker blocker(hardnessSpin);
-        hardnessSpin->setValue(value);
-    });
-    hardnessRow->addWidget(hardnessSpin);
-    layout->addLayout(hardnessRow);
-    m_hardnessSpin = hardnessSpin;
-    m_hardnessSlider = hardnessSlider;
-
-    QHBoxLayout *opacityRow = new QHBoxLayout();
-    opacityRow->addWidget(new QLabel(i18n("Opacity:")));
-    QSpinBox *opacitySpin = new QSpinBox();
-    opacitySpin->setRange(0, 100);
-    opacitySpin->setSuffix(i18n(" %"));
-    opacitySpin->setToolTip(i18n("Maximum coverage of one stroke -- overlapping dabs "
-                                 "within a single stroke never build past this. "
-                                 "Separate strokes over the same area do add up."));
-    opacitySpin->setValue(m_brushOpacity);
-    connect(opacitySpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
-        m_brushOpacity = value;
-    });
-    opacityRow->addWidget(opacitySpin);
-    layout->addLayout(opacityRow);
-
-    QCheckBox *alignedCheck = new QCheckBox(i18n("Aligned"));
-    alignedCheck->setToolTip(i18n("Checked: the source moves with your strokes -- the "
-                                  "offset fixed by the first stroke is kept for all "
-                                  "later strokes (Photoshop-style).\n"
-                                  "Unchecked: every new stroke starts cloning from the "
-                                  "original sampled point again."));
-    alignedCheck->setChecked(m_aligned);
-    connect(alignedCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        m_aligned = checked;
-        // Non-Aligned means every new stroke resamples from the original
-        // source point, so drop any offset fixed by a previous stroke.
-        if (!checked) {
-            m_hasStrokeOffset = false;
+    auto refresh = [this]() {
+        if (m_hasHoverPoint) {
+            updateOutline(m_hoverPoint);
         }
-    });
-    layout->addWidget(alignedCheck);
+    };
+    auto makeSlider = [&](const QString &prefix, const QString &suffix, int min, int max, int value,
+                          const QString &tip, std::function<void(int)> apply) {
+        KisSliderSpinBox *s = new KisSliderSpinBox();
+        s->setRange(min, max);
+        s->setPrefix(prefix);
+        s->setSuffix(suffix);
+        s->setValue(value);
+        s->setToolTip(tip);
+        s->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        connect(s, QOverload<int>::of(&KisSliderSpinBox::valueChanged), this, [apply, refresh](int v) {
+            apply(v);
+            refresh();
+        });
+        return s;
+    };
+    auto smallCheck = [&](const QString &text, bool checked, const QString &tip, std::function<void(bool)> apply) {
+        QCheckBox *c = new QCheckBox(text);
+        c->setChecked(checked);
+        c->setToolTip(tip);
+        connect(c, &QCheckBox::toggled, this, [apply](bool on) { apply(on); });
+        return c;
+    };
 
+    // 1. Sample source (most used) + Aligned
     QHBoxLayout *sampleRow = new QHBoxLayout();
-    sampleRow->addWidget(new QLabel(i18n("Sample:")));
-    QComboBox *sampleCombo = new QComboBox();
-    sampleCombo->setToolTip(i18n("What Ctrl+click reads from: only the active layer, "
-                                 "or the whole image as you see it (all layers "
-                                 "merged). Takes effect at the next Ctrl+click."));
-    sampleCombo->addItem(i18n("Current Layer"));
-    sampleCombo->addItem(i18n("All Layers"));
-    sampleCombo->setCurrentIndex(m_sampleScope == SampleScope::AllLayers ? 1 : 0);
-    connect(sampleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
-        m_sampleScope = (index == 1) ? SampleScope::AllLayers : SampleScope::CurrentLayer;
-        // Deliberately does not retake the source snapshot -- the scope is
-        // captured at Ctrl+click time, same as the Python plugin.
+    sampleRow->setSpacing(2);
+    const QString sampleTip = i18n("What Ctrl+click reads from: only the active layer, or the "
+                                   "whole image as you see it (all layers merged). Takes effect "
+                                   "at the next Ctrl+click.");
+    QToolButton *curBtn = new QToolButton();
+    QToolButton *allBtn = new QToolButton();
+    curBtn->setText(i18n("Current Layer"));
+    allBtn->setText(i18n("All Layers"));
+    for (QToolButton *b : {curBtn, allBtn}) {
+        b->setCheckable(true);
+        b->setAutoExclusive(true);
+        b->setToolTip(sampleTip);
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        sampleRow->addWidget(b);
+    }
+    (m_sampleScope == SampleScope::AllLayers ? allBtn : curBtn)->setChecked(true);
+    connect(allBtn, &QToolButton::toggled, this, [this](bool on) {
+        m_sampleScope = on ? SampleScope::AllLayers : SampleScope::CurrentLayer;
     });
-    sampleRow->addWidget(sampleCombo);
+    sampleRow->addWidget(smallCheck(i18n("Aligned"), m_aligned,
+                                    i18n("Checked: the source moves with your strokes -- the offset "
+                                         "fixed by the first stroke is kept for all later strokes "
+                                         "(Photoshop-style).\nUnchecked: every new stroke starts "
+                                         "cloning from the original sampled point again."),
+                                    [this](bool on) {
+                                        m_aligned = on;
+                                        // Non-Aligned resamples from the original point.
+                                        if (!on) {
+                                            m_hasStrokeOffset = false;
+                                        }
+                                    }));
     layout->addLayout(sampleRow);
+
+    // 2. Presets, one row
+    QHBoxLayout *presetRow = new QHBoxLayout();
+    presetRow->setSpacing(2);
+    const QList<QPair<QString, Preset>> presets = {
+        {i18n("Hard"), PresetRoundHard}, {i18n("Soft"), PresetRoundSoft}, {i18n("Square"), PresetSquare},
+        {i18n("Painterly"), PresetPainterly}, {i18n("Airbrush"), PresetAirbrush}};
+    const QStringList presetTips = {i18n("Round, hard edge"), i18n("Round, soft edge"),
+                                    i18n("Square, slightly feathered"),
+                                    i18n("Textured brush tip, random angle, 60% flow"),
+                                    i18n("Soft round, 8% flow, builds up while held")};
+    for (int i = 0; i < presets.size(); ++i) {
+        QToolButton *b = new QToolButton();
+        b->setText(presets[i].first);
+        b->setToolTip(presetTips[i]);
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        const Preset preset = presets[i].second;
+        connect(b, &QToolButton::clicked, this, [this, preset]() { applyPreset(preset); });
+        presetRow->addWidget(b);
+    }
+    layout->addLayout(presetRow);
+
+    // 3. Tip shape + (only for Brush Tip) Krita's tip chooser
+    QHBoxLayout *shapeRow = new QHBoxLayout();
+    shapeRow->setSpacing(4);
+    shapeRow->addWidget(new QLabel(i18n("Tip:")));
+    m_shapeCombo = new QComboBox();
+    m_shapeCombo->addItem(i18n("Round"));
+    m_shapeCombo->addItem(i18n("Square"));
+    m_shapeCombo->addItem(i18n("Brush Tip"));
+    m_shapeCombo->setToolTip(i18n("Round and Square are generated tips with hardness.\n"
+                                  "Brush Tip uses any of Krita's built-in brush tips, including "
+                                  "imported Photoshop .abr brushes."));
+    connect(m_shapeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, refresh](int i) {
+        m_tipShape = TipShape(i);
+        if (m_tipShape == TipShape::Bitmap && m_tipCoverage.isNull() && m_tipChooser) {
+            setTipResource(m_tipChooser->currentResource());
+        }
+        syncOptionWidgets();
+        refresh();
+    });
+    shapeRow->addWidget(m_shapeCombo, 1);
+    layout->addLayout(shapeRow);
+
+    m_tipChooser = new KisResourceItemChooser(ResourceType::Brushes, false);
+    m_tipChooser->setRowHeight(32);
+    m_tipChooser->setColumnWidth(32);
+    m_tipChooser->showTaggingBar(true);
+    m_tipChooser->setFixedHeight(150);
+    connect(m_tipChooser, &KisResourceItemChooser::resourceSelected, this,
+            [this](KoResourceSP res) { setTipResource(res); });
+    layout->addWidget(m_tipChooser);
+
+    // 4. Sliders, two columns
+    QGridLayout *grid = new QGridLayout();
+    grid->setHorizontalSpacing(3);
+    grid->setVerticalSpacing(3);
+    m_sizeSlider = makeSlider(i18n("Size: "), i18n(" px"), 1, 2000, m_brushSize,
+                              i18n("Brush size in pixels.\nOn canvas: Shift+drag horizontally."),
+                              [this](int v) { m_brushSize = v; });
+    m_sizeSlider->setExponentRatio(3.0);
+    m_hardnessSlider = makeSlider(i18n("Hard: "), i18n(" %"), 0, 100, qRound(m_brushHardness * 100),
+                                  i18n("Edge hardness of Round/Square tips.\n"
+                                       "On canvas: Shift+drag vertically (up = harder)."),
+                                  [this](int v) { m_brushHardness = v / 100.0; });
+    m_opacitySlider = makeSlider(i18n("Opacity: "), i18n(" %"), 0, 100, m_brushOpacity,
+                                 i18n("Maximum coverage of one stroke -- overlapping dabs never "
+                                      "build past this. Separate strokes do add up."),
+                                 [this](int v) { m_brushOpacity = v; });
+    m_flowSlider = makeSlider(i18n("Flow: "), i18n(" %"), 1, 100, m_flow,
+                              i18n("Coverage each dab adds. Low flow builds up gradually "
+                                   "within a stroke, up to the opacity."),
+                              [this](int v) { m_flow = v; });
+    m_angleSlider = makeSlider(i18n("Angle: "), i18n("°"), 0, 359, m_angle,
+                               i18n("Rotation of the brush tip."),
+                               [this](int v) { m_angle = v; });
+    m_roundnessSlider = makeSlider(i18n("Round: "), i18n(" %"), 1, 100, m_roundness,
+                                   i18n("Roundness: squash the tip into a flat/elliptical shape."),
+                                   [this](int v) { m_roundness = v; });
+    m_spacingSlider = makeSlider(i18n("Spacing: "), i18n(" %"), 1, 200, m_spacing,
+                                 i18n("Distance between dabs, in percent of the brush size."),
+                                 [this](int v) { m_spacing = v; });
+    m_rateSlider = makeSlider(i18n("Rate: "), i18n(" /s"), 1, 100, m_airbrushRate,
+                              i18n("Airbrush dabs per second while holding still."),
+                              [this](int v) { m_airbrushRate = v; });
+    KisSliderSpinBox *previewSlider = makeSlider(
+        i18n("Preview: "), i18n(" %"), 0, 100, m_previewOpacity,
+        i18n("Opacity of the source preview under the brush cursor. 0% turns it off."),
+        [this](int v) { m_previewOpacity = v; });
+    const QList<QWidget *> cells = {m_sizeSlider, m_hardnessSlider, m_opacitySlider, m_flowSlider,
+                                    m_angleSlider, m_roundnessSlider, m_spacingSlider, m_rateSlider,
+                                    previewSlider};
+    for (int i = 0; i < cells.size(); ++i) {
+        grid->addWidget(cells[i], i / 2, i % 2);
+    }
+    grid->addWidget(smallCheck(i18n("Auto-hide"), m_previewAutoHide,
+                               i18n("Hide the source preview during a stroke, so you see the "
+                                    "actual painted result under the cursor."),
+                               [this](bool on) { m_previewAutoHide = on; }),
+                    cells.size() / 2, 1);
+    layout->addLayout(grid);
+
+    // 5. Toggles, one row
+    QHBoxLayout *toggleRow = new QHBoxLayout();
+    toggleRow->setSpacing(6);
+    m_randomAngleCheck = smallCheck(i18n("Rnd angle"), m_randomAngle,
+                                    i18n("Rotate every dab randomly -- natural, painterly edges "
+                                         "with textured tips."),
+                                    [this](bool on) { m_randomAngle = on; });
+    m_airbrushCheck = smallCheck(i18n("Airbrush"), m_airbrush,
+                                 i18n("Keep building up while the button is held, even without "
+                                      "moving (use with low Flow)."),
+                                 [this](bool on) {
+                                     m_airbrush = on;
+                                     syncOptionWidgets();
+                                 });
+    toggleRow->addWidget(m_randomAngleCheck);
+    toggleRow->addWidget(m_airbrushCheck);
+    toggleRow->addWidget(new QLabel(i18n("Pressure:")));
+    toggleRow->addWidget(smallCheck(i18n("Size"), m_pressureSize, i18n("Pen pressure controls the size."),
+                                    [this](bool on) { m_pressureSize = on; }));
+    toggleRow->addWidget(smallCheck(i18n("Flow"), m_pressureFlow, i18n("Pen pressure controls the flow."),
+                                    [this](bool on) { m_pressureFlow = on; }));
+    toggleRow->addStretch();
+    layout->addLayout(toggleRow);
 
     layout->addStretch();
     m_optionWidget = widget;
+    syncOptionWidgets();
     return m_optionWidget;
 }

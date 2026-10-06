@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=kritamcp
+X-Python-2-Compatible=false
+X-Krita-Manual=
+Name=KritaMCP Bridge
+Comment=Localhost bridge (127.0.0.1:50017) so Claude Code / Qwen can run Python in Krita for debugging

@@ -292,3 +292,94 @@ pointer.
    implementation is `finalize_stroke` in `clonestamp_core.py` — the C++
    `finalizeStroke()` is a line-by-line port (same dual-clip shrink, same
    accumulator-origin slicing) and any divergence from it is suspect.
+
+---
+
+## 2026-10-06 — Krita 6.0.4 port and flagship release (branch `krita-6.0.4`)
+
+The C++ tool was ported to Qt 6 / Krita 6.0.4 and is now the **flagship**:
+it builds against the official 6.0.4 release toolchain and is distributable
+as a prebuilt DLL in `release/krita-6.0.4-windows-x64/` (installed with
+`install.cmd`). This pass was verified with the new automated harness in
+`tools/krita_mcp/` (an MCP bridge that drives the **real** mouse) plus
+hands-on checks. The automated gates are `tests/clone_test.py`
+(8/16-bit/float, left and right image half) and `tests/brush_tests.py`
+(Opacity cap, Flow buildup, Square vs. Round, Airbrush, Spacing — 6/6 PASS
+on 2026-10-06).
+
+### Qt 6 / Krita 6.0.4 build
+**What/Why:** the tool now compiles with the exact toolchain of the official
+6.0.4 release (llvm-mingw 20251118 / clang 21.1.6, CMake 3.31.8, Ninja
+1.13.2, Krita tag `v6.0.4.1`, deps branch `transition.now/qt6.8.0` = Qt
+6.8.0). A Qt 6.11 build (`transition.now/qt6`) does **not** load into 6.0.4.
+**Test:** build `kritatoolclonestamp` (see `Tool-plugin/NOTE.md`), then run
+`llvm-readobj --coff-imports` of the DLL against `--coff-exports` of the
+installed Krita DLLs — every import must exist. Load the DLL in the official
+6.0.4 install and confirm the tool appears in the toolbox.
+
+### Toolbox icon
+**What/Why:** the tool registers a real toolbox icon (Phosphor Icons
+`stamp-fill`, MIT, Copyright (c) 2020 Phosphor Icons), embedded via
+`tool_clonestamp.qrc`, with tooltip "Clonestamp Tool with Preview", placed
+next to Smart Patch.
+**Test:** start Krita and open the toolbox — the stamp icon sits next to
+Smart Patch; hover it for the tooltip.
+
+### Native pixel pipeline (16-bit bug)
+**What/Why:** sampling and painting now go through Krita's own `KisPainter`
+pipeline using copy-on-write snapshots, so **all bit depths and color
+spaces** work (8/16-bit, float, any color model). Previously sampling read
+into an 8-bit `QImage`, so on non-8-bit layers it **silently did nothing**.
+**Test:** `tests/clone_test.py` — run per depth, e.g.
+`python kcall.py exec "DEPTH='U16'"` then
+`python kcall.py exec -f tests/clone_test.py` (also `U8`, `F32`); it samples
+and clones on the left and right image halves and checks the result.
+
+### Live painting
+**What/Why:** dabs now composite **live per frame** while dragging (not only
+on release), still one undo step per stroke.
+**Test:** manual — Ctrl+click a source, then drag slowly and hold: the
+painted pixels appear while the button is held, before release. (The
+automated tests read the merged image after the stroke, so they confirm the
+result, not the mid-drag timing.)
+
+### Lag-free outline
+**What/Why:** the cursor outline uses Krita's overlay path
+(`updateCanvasToolOutlineDoc` + update-ahead) and the GPU outline
+(`paintToolOutline`), so it tracks the cursor with no trailing or tearing.
+**Test:** manual — sweep the cursor quickly across the canvas; the outline
+stays glued to the cursor with no lag or tearing.
+
+### Brush-tip system + presets
+**What/Why:** tips are Round, Square, or **Brush Tip** (any built-in Krita
+brush tip, including imported Photoshop `.abr`, in a list with thumbnails);
+presets are Hard / Soft / Square / Painterly / Airbrush; sliders for Size,
+Hardness, Opacity (cap per stroke), Flow (per dab), Angle, Roundness,
+Spacing, and Airbrush rate; random angle per dab; airbrush builds up while
+holding still; pen pressure maps to Size and/or Flow.
+**Test:** `tests/brush_tests.py` covers Opacity cap, Flow buildup, Square
+vs. Round, Airbrush, and Spacing (6/6 PASS). For `.abr` tips: import a
+Photoshop brush, pick it in the Brush Tip list, and clone — the dab shape
+follows the tip.
+
+### Compact options layout
+**What/Why:** the options widget is compact; the Sample scope toggle buttons
+(Current Layer / All Layers) sit at the very top, with Aligned beside them.
+**Test:** manual — select the tool and open its options; the scope toggles
+are at the top and the sliders fit without scrolling.
+
+### Performance
+**What/Why:** the stroke buffer is 1 byte/px; compositing runs at most ~60×/s
+over the united area; one mask per stroke; opacity is applied via
+`KisPainter`; the preview is read from a pre-converted block; rotations for
+random angle are cached in 5-degree steps.
+**Test:** manual — paint large, slow, overlapping strokes on a big canvas;
+they should stay smooth. (No dedicated automated test; the brush tests run
+within the same budget.)
+
+### On-canvas messages
+**What/Why:** instead of silent aborts, the tool shows floating messages in
+the canvas (e.g. "Ctrl+click to set a source point first", locked layer).
+**Test:** manual — with the tool selected, click-drag **without** sampling
+first → the canvas shows "Ctrl+click to set a source point first"; lock a
+layer and paint on it → a locked-layer message appears.
